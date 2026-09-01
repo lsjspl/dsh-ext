@@ -55,3 +55,40 @@ export function usePanelOpen(fallback: boolean): boolean {
 
   return open
 }
+
+/**
+ * The session the explorer should answer about.
+ *
+ * The panel sits in `shell.overlay`, a ROOT-scope seat: it is handed no
+ * `sessionId`, and `scopeOf()` returns undefined for root contexts. Without a
+ * session the host resolves the workspace from the registry's first entry —
+ * the oldest workspace it knows — so the panel confidently showed an unrelated
+ * project's tree and change list.
+ *
+ * The toggle button is session-scoped and re-renders per session, so it is the
+ * one entry that knows the answer. It publishes here; the panel reads it. Not
+ * persisted: which session is on screen is this tab's live state, and a stale
+ * id from a previous visit would reintroduce exactly the wrong-project bug.
+ */
+let sessionId: string | undefined
+const sessionListeners = new Set<() => void>()
+
+/** Publish the session on screen. Called from the session-scoped header seat. */
+export function setPanelSession(next: string | undefined): void {
+  if (sessionId === next) return
+  sessionId = next
+  for (const listener of [...sessionListeners]) listener()
+}
+
+/** The session on screen, or undefined before a session-scoped seat has rendered. */
+export function usePanelSession(): string | undefined {
+  const [, bump] = useState(0)
+
+  useEffect(() => {
+    const listener = () => { bump(n => n + 1) }
+    sessionListeners.add(listener)
+    return () => { sessionListeners.delete(listener) }
+  }, [])
+
+  return sessionId
+}

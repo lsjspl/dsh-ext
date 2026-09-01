@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -8,8 +8,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // so they add nothing to the bundle.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { ModelSelectInjected } from '@deepseek-ai/dsh-client-ui-model-selection/client'
-// Declares `ctx.commandUi`, which is the source the `+` launcher opens.
-import type { CommandUiContract } from '@deepseek-ai/dsh-client-ui-commands/client'
+// Declares `ctx.inputTriggers`, the roster the slash menu renders its groups from.
+import type { InputTriggerServiceContract } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import { SettingsPage } from './SettingsPage.tsx'
@@ -17,20 +17,22 @@ import { ComposerImages } from './ComposerImages.tsx'
 import { SidePanel } from './SidePanel.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 import { BalanceBadge } from './BalanceView.tsx'
-import { hasImagePicker, openImagePicker } from './picker-channel.ts'
+import { hasImagePicker, openImagePicker, subscribeImagePicker } from './picker-channel.ts'
 import { DICTS, LOCALE_NS } from './locales.ts'
 import { provideLocale, translate, useT } from './use-locale.ts'
-import { PanelLeftIcon, PanelRightIcon, iconButtonStyle } from './icons.tsx'
-import { setPanelOpen, usePanelOpen } from './panel-state.ts'
+import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, iconButtonStyle } from './icons.tsx'
+import { setPanelOpen, setPanelSession, usePanelOpen } from './panel-state.ts'
+import { useActiveWorkspace, type WorkspacesHook } from './use-workspace.ts'
 import { readClientConfig, useClientConfig } from './use-client-config.ts'
+import { token } from './ui.tsx'
 
 export const name = 'dsh-dev-tool-ext-client'
 /**
  * Only `slots` is declared here — every seat this plugin takes goes through it.
  *
- * `inputTriggers` is deliberately NOT in this list. A name in `inject` is a hard
+ * `commandUi` is deliberately NOT in this list. A name in `inject` is a hard
  * requirement: the whole client half would stay unloaded in a deployment that
- * composes no input-trigger layer, taking the other seven features down with the
+ * composes no command layer, taking the other seven features down with the
  * `+` menu entry. It is instead requested per-feature through `ctx.inject`,
  * which scopes the wait to that one registration.
  */
@@ -89,6 +91,7 @@ export function apply(ctx: Context): void {
   })
 
   registerComposerImages(ctx)
+  registerToolsGroup(ctx)
   // Feature 2 declares the effort ladders server-side; the model seat below
   // renders the row that exposes them.
   registerModelPicker(ctx)
@@ -165,58 +168,111 @@ function registerComposerImages(ctx: Context): void {
 }
 
 /**
- * The image entry inside the `+` launcher's menu.
+ * The attach-file button, in the composer tool row beside the `+` launcher.
  *
- * The `+` button does NOT open a roster of every registered trigger source: it
- * calls `inputTriggers.toggleSource('command', …)`, naming exactly one source.
- * So a rival source — whatever its `order` — can never appear there; it would
- * only surface once the user typed `/`. The seam that reaches that one menu is
- * `ctx.commandUi.register()`, which contributes a row to the command source
- * itself.
+ * One click opens the OS file dialog — no menu, no popup. The `+` launcher's own
+ * menu is not used for this: its only extension seam (`commandUi.register`)
+ * offers a single UI kind, `popupSelect`, so any row added there necessarily
+ * opens a second layer before anything happens.
  *
- * Position: `candidates` appends contributions after the host catalog, and
- * `fuzzyCandidates` returns insertion order untouched for the launcher's empty
- * query. There is no `order` field on a contribution, so "at the very top" is
- * not expressible through this seam — the row lands after the host commands.
- * Shadowing the whole command source to reorder it would mean reproducing the
- * host's entire catalog, directory cache, and argument-claim protocol, which
- * would break `/` for every host command the moment either drifts.
+ * This deliberately does NOT browse the workspace: `@` already inserts workspace
+ * file references, and a second browser for the same files would be a worse
+ * duplicate of it. What the OS dialog adds is the thing `@` cannot reach — a
+ * file from ANYWHERE on the machine, including outside the workspace.
  *
- * `available()` carries both switches: it is called with a fresh projection on
- * every candidate pass, so a hot-reloaded setting takes effect without
- * re-registering a contribution the open menu may be reading.
- *
- * `ui.kind: 'popupSelect'` is the only kind this phase of the contract offers,
- * so the row opens a one-option popup whose selection opens the file dialog.
- * `options` returning a single row makes that popup a confirmation step rather
- * than a real choice — the cost of using the only shape available.
- *
- * Wrapped in `ctx.inject` rather than a bare `ctx.get`, because the command
- * layer is a sibling plugin with no load-order guarantee: a bare read runs once,
- * before the service exists, and silently registers nothing.
+ * `input.phase` gates it: attaching mid-send would change what is being sent, so
+ * the button is disabled during `'adjudicating' | 'claimed' | 'submitting'`.
  */
 function registerImageTrigger(ctx: Context): void {
-  trySlot('composer image command', () => {
-    ctx.inject(['commandUi'], (scoped) => {
-      const commands = scoped.commandUi as CommandUiContract | undefined
-      if (commands?.register === undefined) return
+  trySlot('composer attach button', () => {
+    ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+      name: 'conversation.input.left',
+      id: 'dsh-dev-tool-ext-attach',
+      order: 0,
+      registrant: 'dsh-dev-tool-ext',
+    }, function DevToolAttachButton(props) {
+      const t = useT()
+      const config = useClientConfig()
+      const input = props.useInput(state => state)
+      const ready = useSyncExternalStore(subscribeImagePicker, hasImagePicker, () => false)
+      if (config?.imageComposer.enabled !== true || !config.imageComposer.pickerButton) return null
 
-      scoped.effect(() => commands.register({
-        name: 'image',
-        get description() { return translate('images.pickHint') },
-        available: () => {
+      const busy = input?.phase !== 'plain'
+      const disabled = !ready || busy
+      return (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={openImagePicker}
+          aria-label={t('files.attach')}
+          title={t('files.attach')}
+          data-dsh-plugin="dsh-dev-tool-ext"
+          data-dsh-part="attach-button"
+          style={{ ...iconButtonStyle, opacity: disabled ? 0.45 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }}
+        >
+          <PaperclipIcon />
+        </button>
+      )
+    }))
+  })
+}
+
+/**
+ * A `工具` group in the slash menu, above the shipped `命令` group.
+ *
+ * ## Why this is the `/` menu and not the `+` menu
+ *
+ * The `+` button cannot host it. Its handler calls
+ * `inputTriggers.toggleSource('command', hit)`, and `toggleSource` filters the
+ * roster to `sources(trigger).find(item => item.name === source)` — one source,
+ * selected by that literal name. Every other registered source is dropped
+ * before the menu is seeded, whatever its `order`. Registering a second source
+ * called `command` is not an escape either: the roster throws on a duplicate
+ * trigger/name pair, which would take the shipped command menu down with it.
+ *
+ * The typed `/` path is different: it seeds from the FULL roster
+ * (`roster.sources(hit.trigger)` with no name filter), renders one titled group
+ * per source, and orders them by `order` — so a source registered below the
+ * command source's default 0 lands above it. That is what this does.
+ *
+ * `onPick` returns `'handled'`: the row is a button, not a submenu. Picking it
+ * opens the OS file dialog immediately, with no second layer in between.
+ */
+function registerToolsGroup(ctx: Context): void {
+  trySlot('slash tools group', () => {
+    ctx.inject(['inputTriggers'], (scoped: Context) => {
+      const triggers = scoped.inputTriggers as InputTriggerServiceContract | undefined
+      if (triggers?.registerSource === undefined) return
+
+      scoped.effect(() => triggers.registerSource({
+        trigger: '/',
+      // The slash menu titles a group with `t(source.name)` against the host's
+      // own `slash.menu` namespace. Contributing a key there is impossible:
+      // `locale.register` throws when a namespace already carries that locale,
+      // and ui-input-trigger registers both en and zh at boot. A missing key
+      // falls back to the key verbatim, so the source is NAMED with the text it
+      // should display — the language is fixed at registration, which is also
+      // when the shell picks up the group.
+      name: document.documentElement.lang.startsWith('zh') ? '工具' : 'Tools',
+        // The shipped command source registers no order, so it sits at 0.
+        order: -10,
+        candidates: async (_session, req) => {
           const config = readClientConfig()
-          if (config?.imageComposer.enabled !== true || !config.imageComposer.pickerButton) return false
-          // The picker channel is published by the attachment rail. Without it
-          // the pick would open a dialog whose files have nowhere to land.
-          return hasImagePicker()
+          if (config?.imageComposer.enabled !== true || !config.imageComposer.pickerButton) return []
+          // The rail publishes the dialog; without it the row would open nothing.
+          if (!hasImagePicker()) return []
+          const label = translate('files.attach')
+          // The source owns its own filtering — the pipeline hands the typed
+          // query through rather than matching on the source's behalf.
+          const query = req.query.trim().toLowerCase()
+          if (query.length > 0 && !label.toLowerCase().includes(query) && !'file'.startsWith(query)) return []
+          return [{ name: label, description: translate('files.attachHint') }]
         },
-        ui: {
-          kind: 'popupSelect',
-          options: async () => [{ id: 'pick', label: translate('images.add') }],
-          onSelect: () => { openImagePicker() },
+        onPick: () => {
+          openImagePicker()
+          return 'handled'
         },
-      }), 'dsh-dev-tool-ext: image command contribution')
+      }), 'dsh-dev-tool-ext: slash tools group')
     })
   })
 }
@@ -340,10 +396,20 @@ function registerSidePanel(ctx: Context): void {
       id: 'dsh-dev-tool-ext-explorer',
       order: 40,
       registrant: 'dsh-dev-tool-ext',
-    }, function DevToolSidePanel() {
+    }, function DevToolSidePanel(props: { useWorkspaces?: WorkspacesHook }) {
       const config = useClientConfig()
+      // Root-scope seats get `useWorkspaces`; it is the only reliable answer to
+      // "which project is the user looking at" when no session is open, so the
+      // panel stops falling back to the registry's oldest workspace.
+      const workspace = useActiveWorkspace(props.useWorkspaces)
       if (config?.explorer.enabled !== true) return null
-      return <SidePanel side={config.explorer.side} defaultOpen={config.explorer.defaultOpen} />
+      return (
+        <SidePanel
+          side={config.explorer.side}
+          defaultOpen={config.explorer.defaultOpen}
+          workspace={workspace}
+        />
+      )
     }))
   })
 }
@@ -364,10 +430,13 @@ function registerExplorerToggles(ctx: Context): void {
       id: 'dsh-dev-tool-ext-explorer-toggle',
       order: 70,
       registrant: 'dsh-dev-tool-ext',
-    }, function DevToolExplorerToggle() {
+    }, function DevToolExplorerToggle(props: { sessionId?: string }) {
       const t = useT()
       const config = useClientConfig()
       const open = usePanelOpen(config?.explorer.defaultOpen ?? false)
+      // This seat is session-scoped; the panel's `shell.overlay` seat is not.
+      // Publishing here is what lets the panel ask about the right project.
+      useEffect(() => { setPanelSession(props.sessionId) }, [props.sessionId])
       if (config?.explorer.enabled !== true) return null
       const Icon = config.explorer.side === 'right' ? PanelRightIcon : PanelLeftIcon
       return (

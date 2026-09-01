@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { callApi } from './api.ts'
 import { useResource } from './use-resource.ts'
 import { Notice, buttonStyle, token } from './ui.tsx'
@@ -205,10 +205,19 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
   // The changes list is the one thing here that goes stale on its own: the agent
   // edits files while the panel is open. A slow poll is enough — this is a
   // read-only view, not a watcher.
+  //
+  // The timer is keyed to `query`, NOT to the resource. `useResource` hands back a
+  // fresh object whenever `data`/`error`/`loading` move, so depending on it (even
+  // on its `reload`) re-ran this effect on every settled fetch — and since a
+  // reload itself changes `loading`, each tick tore down and rebuilt the interval
+  // mid-flight. That is what turned one panel open into nine requests. `reload` is
+  // referentially stable, so reading it through a ref keeps the timer single.
+  const reloadRef = useRef(status.reload)
+  reloadRef.current = status.reload
   useEffect(() => {
-    const timer = window.setInterval(() => { status.reload() }, 5000)
+    const timer = window.setInterval(() => { reloadRef.current() }, 5000)
     return () => { window.clearInterval(timer) }
-  }, [status.reload])
+  }, [query])
 
   const openDiff = useCallback(async (change: ChangeEntry) => {
     setDiff({ path: change.path, patch: t('common.loading') })
@@ -223,7 +232,10 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
   }, [scope])
 
   return (
-    <div data-dsh-plugin="dsh-dev-tool-ext" data-dsh-part="explorer" style={{ display: 'flex', flexDirection: 'column', gap: 6, minHeight: 0 }}>
+    // `flex: 1` and `minHeight: 0` together: the first claims the panel's full
+    // height instead of collapsing to content, the second lets the scrolling
+    // children shrink below their intrinsic size rather than overflowing it.
+    <div data-dsh-plugin="dsh-dev-tool-ext" data-dsh-part="explorer" style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
         {(['changes', 'files'] as const).map(name => (
           <button

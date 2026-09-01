@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-workspace'
-import { readdir, realpath, stat } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
 import { git, hasGit, repositoryRoot, splitNul } from '../git.ts'
@@ -56,6 +57,235 @@ async function containedPath(root: string, requested: string): Promise<string> {
 /** Workspace-relative, `/`-separated — the form both halves and git agree on. */
 function toPosix(root: string, absolute: string): string {
   return relative(root, absolute).split(sep).join('/')
+}
+
+/**
+ * Largest file the viewer will fetch. A source file is kilobytes; anything past
+ * this is a bundle, a log, or a database, and shipping it to the browser would
+ * stall the tab rather than show anything a person reads.
+ */
+const MAX_VIEW_BYTES = 2 * 1024 * 1024
+
+/**
+ * Read one file for the viewer.
+ *
+ * Binary content is reported rather than sent. The test is the one every editor
+ * uses — a NUL byte in the head of the file — because sniffing by extension
+ * misses both an unlabelled binary and a perfectly readable file with an odd
+ * suffix. Sending binary bytes as text would paint the panel with replacement
+ * characters and let a multi-megabyte blob through as "text".
+ */
+async function readTextFile(root: string, requested: string): Promise<{
+  path: string
+  content: string
+  language: string
+  truncated: boolean
+  bytes: number
+}> {
+  const absolute = await containedPath(root, requested)
+  const info = await stat(absolute)
+  if (info.isDirectory()) throw new ApiError(400, 'that path is a directory, not a file')
+  if (info.size > MAX_VIEW_BYTES) {
+    throw new ApiError(413, 'that file is too large to preview')
+  }
+
+  const buffer = await readFile(absolute)
+  const head = buffer.subarray(0, Math.min(buffer.length, 8000))
+  if (head.includes(0)) throw new ApiError(415, 'that file is binary, so there is nothing to show')
+
+  const text = buffer.toString('utf8')
+  const lines = text.split('\n')
+  const truncated = lines.length > MAX_VIEW_LINES
+  return {
+    path: requested,
+    content: truncated ? lines.slice(0, MAX_VIEW_LINES).join('\n') : text,
+    language: languageOf(requested),
+    truncated,
+    bytes: info.size,
+  }
+}
+
+/** Line cap for one view; a longer file is cut with the tail reported as trimmed. */
+const MAX_VIEW_LINES = 5000
+
+/**
+ * Candidate VS Code launchers, most specific first.
+ *
+ * `DSH_EXT_EDITOR` comes first so a user on VSCodium, Cursor, or a portable
+ * install can name their own binary instead of being told none was found. The
+ * rest are the documented install locations for each platform.
+ *
+ * On Windows the CLI is `code.cmd` — a batch file, which `execFile` cannot spawn
+ * without a shell. Rather than turn on `shell: true` (which would make every path
+ * below a string the shell re-parses), the launcher is resolved to a concrete
+ * file and spawned through `cmd.exe /c` with the path as a separate argument.
+ */
+function editorCandidates(): string[] {
+  const fromEnv = process.env.DSH_EXT_EDITOR
+  const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
+  const candidates = fromEnv === undefined || fromEnv.length === 0 ? [] : [fromEnv]
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
+    const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
+    candidates.push(
+      join(localAppData, 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
+      join(programFiles, 'Microsoft VS Code', 'bin', 'code.cmd'),
+      join(localAppData, 'Programs', 'cursor', 'resources', 'app', 'bin', 'cursor.cmd'),
+    )
+  } else if (process.platform === 'darwin') {
+    candidates.push(
+      '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
+      join(home, 'Applications', 'Visual Studio Code.app', 'Contents', 'Resources', 'app', 'bin', 'code'),
+      '/opt/homebrew/bin/code',
+      '/usr/local/bin/code',
+    )
+  } else {
+    candidates.push('/usr/bin/code', '/usr/local/bin/code', '/snap/bin/code', '/var/lib/flatpak/exports/bin/com.visualstudio.code')
+  }
+  return candidates
+}
+
+/**
+ * Open a path in VS Code.
+ *
+ * Launch-and-forget: the child is unref'd and detached so the editor outlives
+ * this request, and stdio is ignored so a chatty launcher cannot fill a pipe
+ * nobody drains and wedge itself. What comes back is only whether the spawn was
+ * accepted — the editor's own startup is not something this endpoint can wait on.
+ *
+ * @param root - workspace root, opened as the editor's folder.
+ * @param target - absolute path already proven inside `root`.
+ * @param isFile - true when `target` is a file, so it opens in the folder's window.
+ */
+async function openInEditor(root: string, target: string, isFile: boolean): Promise<{ opened: boolean; editor: string }> {
+  let launcher: string | undefined
+  for (const candidate of editorCandidates()) {
+    try {
+      await stat(candidate)
+      launcher = candidate
+      break
+    } catch { /* try the next location */ }
+  }
+  if (launcher === undefined) {
+    throw new ApiError(409, 'no VS Code installation was found; set DSH_EXT_EDITOR to your editor\'s path')
+  }
+
+  // `--reuse-window` with the folder first keeps a file opening inside the
+  // project's own window instead of a bare single-file window with no context.
+  const args = isFile ? [root, '--reuse-window', '--goto', target] : [root]
+  const isBatch = launcher.toLowerCase().endsWith('.cmd') || launcher.toLowerCase().endsWith('.bat')
+  const command = isBatch ? (process.env.COMSPEC ?? 'cmd.exe') : launcher
+  const commandArgs = isBatch ? ['/d', '/s', '/c', launcher, ...args] : args
+
+  try {
+    const child = spawn(command, commandArgs, { detached: true, stdio: 'ignore', windowsHide: true })
+    child.unref()
+    child.on('error', () => { /* the editor failing to start is not this request's business */ })
+  } catch {
+    throw new ApiError(500, 'the editor could not be started')
+  }
+  return { opened: true, editor: launcher }
+}
+
+/**
+ * Every file in the workspace, workspace-relative, for the composer's file
+ * picker.
+ *
+ * `git ls-files --cached --others --exclude-standard` is the whole listing in
+ * one process: tracked files plus untracked ones that `.gitignore` does not
+ * exclude. Walking the tree by hand would mean re-implementing gitignore
+ * semantics (negations, directory patterns, nested files, the global excludes
+ * file) — a reimplementation that is wrong in exactly the cases users notice,
+ * like a `dist/` that reappears in the picker.
+ *
+ * A directory with no repository falls back to a bounded manual walk, because
+ * there is no git to ask. That path applies `ALWAYS_HIDDEN` only, which is the
+ * honest limit: without a repository there is no ignore file to respect.
+ *
+ * @param root - canonical workspace root.
+ * @param limit - hard cap on returned paths; the caller reports truncation.
+ */
+async function listAllFiles(
+  root: string,
+  limit: number,
+  signal: AbortSignal,
+): Promise<{ files: string[]; truncated: boolean }> {
+  if (await hasGit(root) && await repositoryRoot(root, signal) !== undefined) {
+    const result = await git(
+      ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+      { cwd: root, signal },
+    )
+    if (result.ok) {
+      const all = splitNul(result.stdout).filter(line => line.length > 0)
+      // `--cached` and `--others` can both name a path that is staged and
+      // present, so the set collapses the duplicate.
+      const unique = [...new Set(all)]
+      unique.sort((a, b) => a.localeCompare(b))
+      return { files: unique.slice(0, limit), truncated: unique.length > limit }
+    }
+  }
+
+  const files: string[] = []
+  let truncated = false
+  const walk = async (dir: string): Promise<void> => {
+    if (files.length >= limit) { truncated = true; return }
+    // An unreadable directory is skipped rather than failing the listing: one
+    // permission-denied folder should not cost the user the whole picker.
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      if (signal.aborted) return
+      if (files.length >= limit) { truncated = true; return }
+      if (ALWAYS_HIDDEN.has(entry.name)) continue
+      const absolute = join(dir, entry.name)
+      if (entry.isDirectory()) await walk(absolute)
+      else if (entry.isFile()) files.push(toPosix(root, absolute))
+    }
+  }
+  await walk(root)
+  files.sort((a, b) => a.localeCompare(b))
+  return { files, truncated }
+}
+
+/**
+ * Map a filename to a shiki grammar id.
+ *
+ * The ids are shiki's own (`shellscript`, not `sh`), because the host's
+ * highlighter resolves them against its registered grammar set; an alias it does
+ * not know falls back to plain text, which is a silent loss of colour rather
+ * than an error. Unknown extensions deliberately return `''` — plain but still
+ * monospaced, which is the honest rendering for a file whose language we cannot
+ * name.
+ */
+function languageOf(path: string): string {
+  const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  const dot = name.lastIndexOf('.')
+  const extension = dot <= 0 ? '' : name.slice(dot + 1)
+  const byName: Record<string, string> = {
+    dockerfile: 'docker',
+    makefile: 'make',
+    '.gitignore': 'ini',
+    '.gitattributes': 'ini',
+    '.env': 'ini',
+  }
+  const named = byName[name]
+  if (named !== undefined) return named
+  const byExtension: Record<string, string> = {
+    ts: 'typescript', tsx: 'tsx', mts: 'typescript', cts: 'typescript',
+    js: 'javascript', jsx: 'jsx', mjs: 'javascript', cjs: 'javascript',
+    json: 'json', jsonc: 'json', json5: 'json',
+    py: 'python', pyi: 'python',
+    rs: 'rust', go: 'go', java: 'java', kt: 'kotlin', kts: 'kotlin',
+    c: 'c', h: 'c', cc: 'cpp', cpp: 'cpp', cxx: 'cpp', hpp: 'cpp', hh: 'cpp',
+    cs: 'csharp', php: 'php', rb: 'ruby', swift: 'swift', lua: 'lua',
+    sh: 'shellscript', bash: 'shellscript', zsh: 'shellscript', fish: 'shellscript',
+    bat: 'bat', cmd: 'bat', ps1: 'powershell',
+    yml: 'yaml', yaml: 'yaml', toml: 'toml', ini: 'ini', cfg: 'ini', conf: 'ini',
+    md: 'markdown', markdown: 'markdown', mdx: 'mdx',
+    html: 'html', htm: 'html', xml: 'xml', svg: 'xml',
+    css: 'css', scss: 'scss', less: 'less',
+    sql: 'sql', vue: 'vue', diff: 'diff', patch: 'diff',
+  }
+  return byExtension[extension] ?? ''
 }
 
 /**
@@ -243,27 +473,87 @@ function sessionRoot(ctx: Context, sessionId: string): string | undefined {
 }
 
 /**
+ * The workspace a session belongs to, for a session the live registry no longer
+ * holds.
+ *
+ * Reopening yesterday's conversation is the ordinary case, not an edge one, and
+ * `sessions.get` returns nothing for it — so without this step every historical
+ * session fell through to the "oldest workspace" fallback and described a
+ * project the user was not looking at.
+ *
+ * `sessionIds` is the registry's own header-validated projection (it is what
+ * groups the sidebar), so it covers persisted sessions and costs no disk read
+ * here.
+ */
+function workspaceRootBySession(ctx: Context, sessionId: string): string | undefined {
+  const owning = ctx.get('workspaceRegistry')?.list()
+    .find(workspace => workspace.sessionIds.some(id => String(id) === sessionId))
+  return owning?.path
+}
+
+/**
+ * The `cwd` recorded in the session's own stored header.
+ *
+ * This is the authoritative answer and the reason the earlier two steps are not
+ * enough: `sessionIds` is filtered by an index the registry builds at startup,
+ * documented to drop candidates whose headers are missing or whose cwd fails
+ * canonicalization — so it legitimately returns nothing for a session whose file
+ * is on disk and perfectly readable. The header, by contrast, is written once at
+ * creation and never rewritten, so it says where the conversation actually ran.
+ *
+ * Costs one backend listing, which is why it sits behind the two synchronous
+ * steps rather than in front of them.
+ */
+async function sessionRootFromHeader(ctx: Context, sessionId: string, signal: AbortSignal): Promise<string | undefined> {
+  const persistence = ctx.get('sessionPersistence')
+  if (persistence === undefined) return undefined
+  try {
+    const headers = await persistence.list(signal)
+    const found = headers.find(header => String(header.id) === sessionId)
+    const cwd: unknown = (found as { cwd?: unknown } | undefined)?.cwd
+    return typeof cwd === 'string' && cwd.length > 0 ? cwd : undefined
+  } catch {
+    // A backend that cannot list is not a reason to fail the whole request; the
+    // caller still has the client-named workspace to fall back to.
+    return undefined
+  }
+}
+
+/**
  * Decide which directory to answer about, most authoritative source first.
  *
  *   1. The requesting session's own `cwd` — the project the user is demonstrably
- *      working in. Only a materialized session has one.
- *   2. The workspace the client named. For a blank session (no `cwd` yet, because
+ *      working in. Only a LIVE session has one.
+ *   2. The workspace that owns the session, for a session the live registry has
+ *      already dropped. Reopening an older conversation is ordinary, so without
+ *      this the common case fell straight through to step 5.
+ *   3. The `cwd` in the session's stored header — authoritative, and the step that
+ *      catches sessions the registry's startup index filtered out.
+ *   4. The workspace the client named. For a blank session (no `cwd` yet, because
  *      nothing has been sent) the browser passes the most recently active
  *      workspace, which is what the user last chose.
- *   3. The registry's first entry, as a last resort.
+ *   5. The registry's first entry, as a last resort.
  *
- * Step 3 alone used to be the whole implementation, and it was wrong in the
- * common case: the registry's first entry is its OLDEST workspace, so a fresh
- * session showed some unrelated project's file tree and change list as though it
- * were the current one.
+ * Step 5 alone used to be the whole implementation, and it was wrong in the
+ * common case: the registry's first entry is its OLDEST workspace, so a session
+ * showed some unrelated project's file tree and change list as though it were
+ * the current one — and a changes list belonging to a different repository looks
+ * authoritative while being wrong.
  */
-function resolveRoot(ctx: Context, requestedId: string | null, sessionId?: string | null): { id: string; root: string } {
+async function resolveRoot(
+  ctx: Context,
+  requestedId: string | null,
+  sessionId: string | null | undefined,
+  signal: AbortSignal,
+): Promise<{ id: string; root: string }> {
   const roots = workspaceRoots(ctx)
   const first = roots[0]
   if (first === undefined) throw new ApiError(409, 'this deployment has no workspace to explore')
 
   if (sessionId !== undefined && sessionId !== null && sessionId.length > 0) {
     const root = sessionRoot(ctx, sessionId)
+      ?? workspaceRootBySession(ctx, sessionId)
+      ?? await sessionRootFromHeader(ctx, sessionId, signal)
     if (root !== undefined) {
       // Report the registry's id for it when there is one, so the client can pin
       // the same workspace on later calls.
@@ -292,9 +582,9 @@ export function mountExplorer(
     '/explorer/tree': async ({ query, req }) => {
       const settings = config()
       if (!settings.explorer.enabled) throw new ApiError(404, 'the explorer is switched off')
-      const { id, root } = resolveRoot(ctx, query.get('workspace'), query.get('session'))
       const controller = new AbortController()
       req.on('close', () => { controller.abort() })
+      const { id, root } = await resolveRoot(ctx, query.get('workspace'), query.get('session'), controller.signal)
       const dir = await containedPath(root, query.get('path') ?? '')
       return {
         workspace: id,
@@ -305,22 +595,22 @@ export function mountExplorer(
 
     '/explorer/status': async ({ query, req }) => {
       if (!config().explorer.enabled) throw new ApiError(404, 'the explorer is switched off')
-      const { id, root } = resolveRoot(ctx, query.get('workspace'), query.get('session'))
       const controller = new AbortController()
       req.on('close', () => { controller.abort() })
+      const { id, root } = await resolveRoot(ctx, query.get('workspace'), query.get('session'), controller.signal)
       return { workspace: id, ...await readStatus(root, controller.signal) }
     },
 
     '/explorer/diff': async ({ query, req }) => {
       if (!config().explorer.enabled) throw new ApiError(404, 'the explorer is switched off')
-      const { root } = resolveRoot(ctx, query.get('workspace'), query.get('session'))
+      const controller = new AbortController()
+      req.on('close', () => { controller.abort() })
+      const { root } = await resolveRoot(ctx, query.get('workspace'), query.get('session'), controller.signal)
       const requested = query.get('path')
       if (requested === null || requested.length === 0) throw new ApiError(400, 'a path is required')
       // Validate containment before handing the path to git, then pass it after
       // `--` so a path that looks like an option cannot become one.
       await containedPath(root, requested)
-      const controller = new AbortController()
-      req.on('close', () => { controller.abort() })
       const staged = query.get('staged') === '1'
       const result = await git(
         ['diff', ...(staged ? ['--cached'] : []), '--no-color', '--', requested],
@@ -330,6 +620,39 @@ export function mountExplorer(
         throw new ApiError(409, 'git could not produce a diff for that path')
       }
       return { path: requested, staged, patch: result.stdout }
+    },
+
+    '/explorer/file': async ({ query, req }) => {
+      if (!config().explorer.enabled) throw new ApiError(404, 'the explorer is switched off')
+      const controller = new AbortController()
+      req.on('close', () => { controller.abort() })
+      const { root } = await resolveRoot(ctx, query.get('workspace'), query.get('session'), controller.signal)
+      const requested = query.get('path')
+      if (requested === null || requested.length === 0) throw new ApiError(400, 'a path is required')
+      return await readTextFile(root, requested)
+    },
+
+    '/explorer/files': async ({ query, req }) => {
+      if (!config().explorer.enabled) throw new ApiError(404, 'the explorer is switched off')
+      const controller = new AbortController()
+      req.on('close', () => { controller.abort() })
+      const { id, root } = await resolveRoot(ctx, query.get('workspace'), query.get('session'), controller.signal)
+      // The picker loads this list once per open and filters it in the browser,
+      // so the cap trades a bounded payload against completeness on a huge repo.
+      const listing = await listAllFiles(root, 4000, controller.signal)
+      return { workspace: id, ...listing }
+    },
+
+    '/explorer/open-editor': async ({ query, req }) => {
+      if (!config().explorer.enabled) throw new ApiError(404, 'the explorer is switched off')
+      const controller = new AbortController()
+      req.on('close', () => { controller.abort() })
+      const { root } = await resolveRoot(ctx, query.get('workspace'), query.get('session'), controller.signal)
+      // A path is optional: with none, the editor opens the workspace itself,
+      // which is what the toolbar button asks for.
+      const requested = query.get('path') ?? ''
+      const target = requested.length === 0 ? root : await containedPath(root, requested)
+      return await openInEditor(root, target, requested.length > 0)
     },
   })
 }

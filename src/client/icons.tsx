@@ -135,6 +135,56 @@ export function CheckIcon(props: IconProps) {
   )
 }
 
+/** A plus, for the tab strip's "add a view" launcher. */
+export function PlusIcon(props: IconProps) {
+  const size = props.size ?? 14
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8 3.4V12.6M3.4 8H12.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** An X, for closing one tab. Smaller weight than the host's dialog close. */
+export function CloseIcon(props: IconProps) {
+  const size = props.size ?? 12
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M4.2 4.2L11.8 11.8M11.8 4.2L4.2 11.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** VS Code's mark, for the "open this project in the editor" button. */
+export function VscodeIcon(props: IconProps) {
+  const size = props.size ?? 16
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M11.55 1.05L6.5 5.85L3.6 3.65L2.05 4.35L4.75 7.05C5.05 7.35 5.05 7.85 4.75 8.15L2.05 10.85L3.6 11.55L6.5 9.35L11.55 14.15C12.05 14.6 12.85 14.35 12.95 13.7V1.5C12.85 0.85 12.05 0.6 11.55 1.05Z"
+        fill="currentColor"
+      />
+      <path d="M11.5 4.35V10.85L7.85 7.6L11.5 4.35Z" fill="var(--dsw-alias-bg-base, #101014)" />
+    </svg>
+  )
+}
+
+/** A paperclip: the universal "attach a file" glyph. */
+export function PaperclipIcon(props: IconProps) {
+  const size = props.size ?? 16
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M12.4 7.3L7.7 12a2.9 2.9 0 0 1-4.1-4.1l5-5a1.95 1.95 0 0 1 2.75 2.75l-5 5a0.97 0.97 0 0 1-1.38-1.38l4.4-4.4"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 /** A branch with two commits, for the changes tab. */
 export function GitIcon(props: IconProps) {
   const size = props.size ?? 16

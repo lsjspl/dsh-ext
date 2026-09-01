@@ -39,6 +39,9 @@ importers:
       '@deepseek-ai/dsh-client-runtime':
         specifier: ^0.1.1-rc.2
         version: 0.1.1-rc.2(7254605502c733b0b58e6c4bf8a6de67)
+      '@deepseek-ai/dsh-client-ui-commands':
+        specifier: ^0.1.1-rc.2
+        version: 0.1.1-rc.2(73e4223f74dd10c4ff83e3d36a46d424)
       '@deepseek-ai/dsh-client-ui-conversation':
         specifier: ^0.1.1-rc.2
         version: 0.1.1-rc.2(96b67fac448d2b1fcac142619862787b)

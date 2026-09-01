@@ -87,16 +87,19 @@ export function ComposerImages(props: ComposerImagesProps) {
   const [dragging, setDragging] = useState<DraftAttachmentId | undefined>(undefined)
   const [over, setOver] = useState<DraftAttachmentId | undefined>(undefined)
   const [fileOver, setFileOver] = useState(false)
-  const [refused, setRefused] = useState(false)
+  /**
+   * A transient line under the rail: a refused reorder, or what became of a
+   * non-image file. It explains one gesture, so it clears itself rather than
+   * attaching to the next.
+   */
+  const [notice, setNotice] = useState<string | undefined>(undefined)
   const fileInput = useRef<HTMLInputElement | null>(null)
 
-  // A refusal notice is transient: it explains one failed gesture, and leaving
-  // it up would attach it to the next one.
   useEffect(() => {
-    if (!refused) return
-    const timer = window.setTimeout(() => { setRefused(false) }, 2600)
+    if (notice === undefined) return
+    const timer = window.setTimeout(() => { setNotice(undefined) }, 4000)
     return () => { window.clearTimeout(timer) }
-  }, [refused])
+  }, [notice])
 
   const reorderable = dragEnabled
     && actions !== undefined
@@ -111,7 +114,7 @@ export function ComposerImages(props: ComposerImagesProps) {
     if (fromIndex < 0 || toIndex < 0) return
     ids.splice(fromIndex, 1)
     ids.splice(toIndex, 0, from)
-    if (!applyOrder(actions, input.imageIds, ids)) setRefused(true)
+    if (!applyOrder(actions, input.imageIds, ids)) setNotice(t('images.busy'))
   }, [actions, input])
 
   /** Keyboard reordering, so the feature is not mouse-only. */
@@ -126,22 +129,68 @@ export function ComposerImages(props: ComposerImagesProps) {
     if (moved === undefined || displaced === undefined) return
     ids[index] = displaced
     ids[target] = moved
-    if (!applyOrder(actions, input.imageIds, ids)) setRefused(true)
+    if (!applyOrder(actions, input.imageIds, ids)) setNotice(t('images.busy'))
   }, [actions, input])
 
   const pick = useCallback(() => { fileInput.current?.click() }, [])
 
-  // Publish the picker for the tool-row button, which has no way to admit a
-  // file of its own (see picker-channel.ts).
-  useEffect(() => provideImagePicker(pick), [pick])
+  /**
+   * Append text to the draft on another surface's behalf.
+   *
+   * `setDraft` takes the WHOLE next draft, so appending means reading the
+   * current one first — which is why this lives here, beside the only props
+   * that carry it, rather than in the caller.
+   *
+   * A separating space is added only when the draft neither is empty nor
+   * already ends in whitespace, so a path never fuses onto the previous word
+   * and a deliberate trailing space is not doubled.
+   */
+  const insertText = useCallback((text: string): boolean => {
+    if (actions === undefined || input === undefined) return false
+    if (input.phase !== 'plain') return false
+    const current = input.draft
+    const separator = current.length === 0 || /\s$/.test(current) ? '' : ' '
+    actions.setDraft(`${current}${separator}${text}`)
+    return true
+  }, [actions, input])
 
-  const onPicked = useCallback((files: FileList | null) => {
+  // Publish the rail's verbs for the surfaces that have no way to reach the
+  // attachment registry or the draft themselves (see picker-channel.ts).
+  useEffect(() => provideImagePicker({ pick, insertText }), [pick, insertText])
+
+  /**
+   * Admit whatever the dialog returned.
+   *
+   * The composer's attachment plane is image-only by contract — `addImages`,
+   * and a submit envelope whose media types are png/jpeg/webp/gif — so a
+   * non-image cannot become an attachment however it is picked. Rather than
+   * refusing the file outright, its text is appended to the draft, which is the
+   * form the agent can actually read. A binary that is not an image has neither
+   * path, so it is reported instead of being silently dropped.
+   */
+  const onPicked = useCallback(async (files: FileList | null) => {
     if (files === null || files.length === 0) return
-    const images = [...files].filter(file => file.type.startsWith('image/'))
-    if (images.length > 0) onAddImages(images)
-    // Reset so choosing the same file twice in a row still fires a change.
+    const picked = [...files]
+    // Reset first: the same file chosen twice in a row must still fire a change.
     if (fileInput.current !== null) fileInput.current.value = ''
-  }, [onAddImages])
+
+    const images = picked.filter(file => file.type.startsWith('image/'))
+    if (images.length > 0) onAddImages(images)
+
+    for (const file of picked) {
+      if (file.type.startsWith('image/')) continue
+      const text = await file.text().catch(() => undefined)
+      // A NUL byte is the test every editor uses for "this is not text"; the
+      // extension is not consulted because an unlabelled binary would pass it.
+      if (text === undefined || text.includes('\u0000')) {
+        setNotice(t('files.unreadable', { name: file.name }))
+        continue
+      }
+      const fence = '```'
+      insertText(`\n${fence} ${file.name}\n${text}\n${fence}\n`)
+      setNotice(t('files.notImage', { name: file.name }))
+    }
+  }, [onAddImages, insertText, t])
 
   const onDragStart = (id: DraftAttachmentId) => (event: ReactDragEvent<HTMLDivElement>) => {
     if (!reorderable) return
@@ -217,12 +266,11 @@ export function ComposerImages(props: ComposerImagesProps) {
       <input
         ref={fileInput}
         type="file"
-        accept="image/*"
         multiple
         hidden
         aria-hidden="true"
         tabIndex={-1}
-        onChange={event => { onPicked(event.currentTarget.files) }}
+        onChange={event => { void onPicked(event.currentTarget.files) }}
       />
 
       {attachments.length > 0 && (
@@ -335,9 +383,9 @@ export function ComposerImages(props: ComposerImagesProps) {
         </div>
       )}
 
-      {refused && (
+      {notice !== undefined && (
         <div role="status" style={{ fontSize: 11, color: token.textMuted, paddingBottom: 4 }}>
-          The composer is busy sending; the image order was left as it was.
+          {notice}
         </div>
       )}
 
