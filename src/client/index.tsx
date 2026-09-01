@@ -8,8 +8,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // so they add nothing to the bundle.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { ModelSelectInjected } from '@deepseek-ai/dsh-client-ui-model-selection/client'
-// Declares `ctx.inputTriggers`, which is how the `+` launcher's menu is joined.
-import type { InputTriggerServiceContract } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+// Declares `ctx.commandUi`, which is the source the `+` launcher opens.
+import type { CommandUiContract } from '@deepseek-ai/dsh-client-ui-commands/client'
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import { SettingsPage } from './SettingsPage.tsx'
@@ -167,60 +167,56 @@ function registerComposerImages(ctx: Context): void {
 /**
  * The image entry inside the `+` launcher's menu.
  *
- * The `+` button is the input-trigger launcher: it opens the same grouped
- * candidate menu that typing `/` produces, over a synthetic selection span. Its
- * groups are not a slot — they are the `ctx.inputTriggers` source roster — so the
- * way in is to register a source rather than to look for a seat inside the popup.
+ * The `+` button does NOT open a roster of every registered trigger source: it
+ * calls `inputTriggers.toggleSource('command', …)`, naming exactly one source.
+ * So a rival source — whatever its `order` — can never appear there; it would
+ * only surface once the user typed `/`. The seam that reaches that one menu is
+ * `ctx.commandUi.register()`, which contributes a row to the command source
+ * itself.
  *
- * `order: -1` puts this group above the command roster (which registers at the
- * default 0), which is what "at the very top" asks for. `showGroupTitle: false`
- * keeps it a single flat row instead of a one-item section with a heading.
+ * Position: `candidates` appends contributions after the host catalog, and
+ * `fuzzyCandidates` returns insertion order untouched for the launcher's empty
+ * query. There is no `order` field on a contribution, so "at the very top" is
+ * not expressible through this seam — the row lands after the host commands.
+ * Shadowing the whole command source to reorder it would mean reproducing the
+ * host's entire catalog, directory cache, and argument-claim protocol, which
+ * would break `/` for every host command the moment either drifts.
  *
- * `onPick` returns `'handled'`: the pick opens the OS file dialog and consumes
- * the token itself, with no draft text to insert and no host command to run.
+ * `available()` carries both switches: it is called with a fresh projection on
+ * every candidate pass, so a hot-reloaded setting takes effect without
+ * re-registering a contribution the open menu may be reading.
  *
- * The registration is wrapped in `ctx.inject` rather than reading the service
- * directly, because the trigger layer is a sibling plugin with no load-order
- * guarantee against this one: a bare `ctx.get` runs once, before the service
- * exists, and silently registers nothing. `ctx.inject` defers this body until
- * `inputTriggers` is up and re-runs it if the layer ever reloads.
+ * `ui.kind: 'popupSelect'` is the only kind this phase of the contract offers,
+ * so the row opens a one-option popup whose selection opens the file dialog.
+ * `options` returning a single row makes that popup a confirmation step rather
+ * than a real choice — the cost of using the only shape available.
+ *
+ * Wrapped in `ctx.inject` rather than a bare `ctx.get`, because the command
+ * layer is a sibling plugin with no load-order guarantee: a bare read runs once,
+ * before the service exists, and silently registers nothing.
  */
 function registerImageTrigger(ctx: Context): void {
   trySlot('composer image command', () => {
-    ctx.inject(['inputTriggers'], (scoped) => {
-      const triggers = scoped.inputTriggers as InputTriggerServiceContract | undefined
-      if (triggers?.registerSource === undefined) return
+    ctx.inject(['commandUi'], (scoped) => {
+      const commands = scoped.commandUi as CommandUiContract | undefined
+      if (commands?.register === undefined) return
 
-      scoped.effect(() => triggers.registerSource({
-        trigger: '/',
-        name: 'dsh-dev-tool-ext-image',
-        order: -1,
-        showGroupTitle: false,
-        candidates: async (_session, req) => {
-          // Both switches are read per query rather than at registration:
-          // settings are hot-reloaded, and a source disposed/re-registered on
-          // every toggle would race the menu that is currently reading it.
+      scoped.effect(() => commands.register({
+        name: 'image',
+        get description() { return translate('images.pickHint') },
+        available: () => {
           const config = readClientConfig()
-          if (config?.imageComposer.enabled !== true || !config.imageComposer.pickerButton) return []
+          if (config?.imageComposer.enabled !== true || !config.imageComposer.pickerButton) return false
           // The picker channel is published by the attachment rail. Without it
           // the pick would open a dialog whose files have nowhere to land.
-          if (!hasImagePicker()) return []
-
-          // The launcher seeds this source with an empty query; a typed `/`
-          // filters it. Answering nothing for a non-matching query keeps the row
-          // out of an unrelated command search rather than pinning it above
-          // every result.
-          const query = req.query.trim().toLowerCase()
-          const label = translate('images.add')
-          if (query.length > 0 && !'image'.startsWith(query) && !'图片'.startsWith(query)
-            && !label.toLowerCase().startsWith(query)) return []
-          return [{ name: label, description: translate('images.pickHint') }]
+          return hasImagePicker()
         },
-        onPick: () => {
-          openImagePicker()
-          return 'handled'
+        ui: {
+          kind: 'popupSelect',
+          options: async () => [{ id: 'pick', label: translate('images.add') }],
+          onSelect: () => { openImagePicker() },
         },
-      }), 'dsh-dev-tool-ext: image trigger source')
+      }), 'dsh-dev-tool-ext: image command contribution')
     })
   })
 }
