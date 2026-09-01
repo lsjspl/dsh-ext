@@ -1,0 +1,5 @@
+# pnpm 11 reads build-script allowances from here rather than package.json.
+# esbuild ships a platform binary and needs its install script to run; it is a
+# devDependency only — published consumers install prebuilt `lib/`.
+allowBuilds:
+  esbuild: true

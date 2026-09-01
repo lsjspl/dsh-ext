@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dsh-web",
+      "runtimeExecutable": "dsh",
+      "runtimeArgs": ["--profile", "web", "--port", "18996", "--no-open"],
+      "port": 18996
+    }
+  ]
+}
