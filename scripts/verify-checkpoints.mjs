@@ -124,7 +124,7 @@ const storeBundle = join(process.cwd(), 'lib', 'checkpoint-store.verify.mjs')
 const verifyEntry = join(process.cwd(), 'src', 'checkpoints.verify.entry.ts')
 writeFileSync(verifyEntry, [
   "export { CheckpointStore } from './checkpoint-store.ts'",
-  "export { turnForMessageEvents } from './features/checkpoints.ts'",
+  "export { liveSessionCwd, turnForMessageEvents } from './features/checkpoints.ts'",
   "export { DEFAULT_CHECKPOINT_EXCLUDES } from './config.ts'",
 ].join(String.fromCharCode(10)))
 await build({
@@ -136,12 +136,20 @@ await build({
   packages: 'external',
   logLevel: 'error',
 })
-const { CheckpointStore, DEFAULT_CHECKPOINT_EXCLUDES, turnForMessageEvents } = await import(pathToFileURL(storeBundle).href)
+const { CheckpointStore, DEFAULT_CHECKPOINT_EXCLUDES, liveSessionCwd, turnForMessageEvents } = await import(pathToFileURL(storeBundle).href)
 rmSync(verifyEntry, { force: true })
 
 // The excludes and cap the plugin actually ships with, so this exercises the
 // configuration users get rather than one invented for the test.
 const store = new CheckpointStore(shadowRoot, DEFAULT_CHECKPOINT_EXCLUDES, 32)
+
+process.stdout.write('Workspace identity:\n')
+report('a live session reads cwd from session.header',
+  liveSessionCwd({ header: { cwd: 'C:/projects/test' } }) === 'C:/projects/test')
+report('the obsolete session.meta field is never trusted',
+  liveSessionCwd({ meta: { cwd: 'C:/projects/wrong' } }) === undefined)
+report('a missing header yields no guessed workspace', liveSessionCwd({}) === undefined)
+process.stdout.write('\n')
 
 process.stdout.write('Message-to-turn mapping:\n')
 const messageEvents = [

@@ -29,14 +29,22 @@ const MUTATING_TOOLS = new Set([
   'bash', 'pwsh', 'run_command', 'run_code',
 ])
 
-/** Which workspace a call belongs to, or the process cwd in a minimal composition. */
+/** Read the actual cwd from a live Session. The field is `header`, never `meta`. */
+export function liveSessionCwd(session: unknown): string | undefined {
+  const cwd = (session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd
+  return typeof cwd === 'string' && cwd.length > 0 ? cwd : undefined
+}
+
+/** Which workspace a call belongs to. A mutating checkpoint must never guess. */
 function workTreeOf(ctx: Context, exec: ToolExecution): string {
-  const session = (exec.agent as { session?: { meta?: { cwd?: unknown } } } | undefined)?.session
-  const cwd = session?.meta?.cwd
-  if (typeof cwd === 'string' && cwd.length > 0) return cwd
-  const registry = ctx.get('workspaceRegistry')
-  const first = registry?.list()[0]
-  return first?.path ?? process.cwd()
+  const session = (exec.agent as { session?: unknown } | undefined)?.session
+  const cwd = liveSessionCwd(session)
+  if (cwd !== undefined) return cwd
+  const sessionId = sessionIdOf(exec)
+  const owning = ctx.get('workspaceRegistry')?.list()
+    .find(row => row.sessionIds.some(id => String(id) === sessionId))
+  if (owning !== undefined) return owning.path
+  throw new Error(`cannot resolve the workspace for session ${sessionId}; refusing to checkpoint another project`)
 }
 
 function sessionIdOf(exec: ToolExecution): string {
@@ -82,15 +90,33 @@ export function turnForMessageEvents(events: readonly unknown[], messageId: stri
   return undefined
 }
 
-function requireWorkspace(ctx: Context, requested: string | null, sessionId?: string): string {
-  if (sessionId !== undefined && sessionId.length > 0) {
-    const live = ctx.get('sessions')?.get(sessionId as never) as { meta?: { cwd?: unknown } } | undefined
-    const cwd = live?.meta?.cwd
-    if (typeof cwd === 'string' && cwd.length > 0) return cwd
+async function requireWorkspace(
+  ctx: Context,
+  requested: string | null,
+  sessionId?: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (sessionId !== undefined && sessionId.length > 0 && sessionId !== 'manual') {
+    const live = ctx.get('sessions')?.get(sessionId as never)
+    const liveCwd = liveSessionCwd(live)
+    if (typeof liveCwd === 'string' && liveCwd.length > 0) return liveCwd
+
     const owning = ctx.get('workspaceRegistry')?.list()
       .find(row => row.sessionIds.some(id => String(id) === sessionId))
     if (owning !== undefined) return owning.path
+
+    const persistence = ctx.get('sessionPersistence')
+    if (persistence !== undefined) {
+      try {
+        const inspection = await persistence.inspect(sessionId as never, signal)
+        const storedCwd: unknown = inspection.meta.cwd
+        if (typeof storedCwd === 'string' && storedCwd.length > 0) return storedCwd
+      } catch { /* fail closed below; never substitute another project */ }
+    }
+
+    throw new ApiError(409, `cannot resolve the workspace for session ${sessionId}; refusing to use another project`)
   }
+
   if (requested !== null && requested.length > 0) {
     const registry = ctx.get('workspaceRegistry')
     const found = registry?.list().find(row => String(row.id) === requested || row.path === requested)
@@ -165,23 +191,24 @@ export function mountCheckpoints(
     if (!MUTATING_TOOLS.has(exec.name)) return await next()
 
     const sessionId = sessionIdOf(exec)
-    const workTree = workTreeOf(ctx, exec)
-    const turn = turnOf(exec)
 
-    if (current.snapshotOn === 'turn') {
-      // Turn is part of the key: clearing on a sentinel tool name (`stop`) is
-      // not a turn boundary and left later turns permanently coalesced. The
-      // event-derived turn is the real boundary, so every mutating answer gets
-      // exactly one pre-mutation checkpoint.
-      const key = `${workTree}\0${sessionId}\0${turn ?? `call:${String(exec.rootCallId)}`}`
-      if (turnSnapshots.has(key)) return await next()
-      turnSnapshots.add(key)
-    }
-
-    // A snapshot must never fail a tool call: a checkpoint is a convenience,
-    // and refusing the user's work because git hiccuped would be a worse
-    // outcome than a missing checkpoint.
+    // A snapshot must never fail a tool call: workspace resolution and git work
+    // are both conveniences. Crucially, a failed resolution is logged and
+    // SKIPPED — never redirected to another project's first registry row.
     try {
+      const workTree = workTreeOf(ctx, exec)
+      const turn = turnOf(exec)
+
+      if (current.snapshotOn === 'turn') {
+        // Turn is part of the key: clearing on a sentinel tool name (`stop`) is
+        // not a turn boundary and left later turns permanently coalesced. The
+        // event-derived turn is the real boundary, so every mutating answer gets
+        // exactly one pre-mutation checkpoint.
+        const key = `${workTree}\0${sessionId}\0${turn ?? `call:${String(exec.rootCallId)}`}`
+        if (turnSnapshots.has(key)) return await next()
+        turnSnapshots.add(key)
+      }
+
       await serialize(workTree, async () => {
         const snapshot = await store.snapshot(workTree, sessionId, turnLabel(turn, exec.name))
         if (turn !== undefined) await store.linkTurn(workTree, sessionId, turn, snapshot.id)
@@ -195,10 +222,10 @@ export function mountCheckpoints(
   const contributed = installRoutes(routes, {
     '/checkpoints': async ({ query, req }) => {
       if (!config().checkpoints.enabled) throw new ApiError(404, 'checkpoints are switched off')
-      const workTree = requireWorkspace(ctx, query.get('workspace'))
       const controller = new AbortController()
       req.on('close', () => { controller.abort() })
       const sessionId = query.get('session') ?? undefined
+      const workTree = await requireWorkspace(ctx, query.get('workspace'), sessionId, controller.signal)
       return {
         workspace: workTree,
         exists: await store.exists(workTree),
@@ -217,7 +244,7 @@ export function mountCheckpoints(
       if (messageId === null || messageId.length === 0) throw new ApiError(400, 'a message id is required')
       const controller = new AbortController()
       req.on('close', () => { controller.abort() })
-      const workTree = requireWorkspace(ctx, query.get('workspace'), sessionId)
+      const workTree = await requireWorkspace(ctx, query.get('workspace'), sessionId, controller.signal)
       const turn = await turnForMessage(sessionId, messageId, controller.signal)
       if (turn === undefined) return { checkpoint: null }
       const checkpoint = await checkpointForTurn(workTree, sessionId, turn, controller.signal)
@@ -234,8 +261,8 @@ export function mountCheckpoints(
       if (method !== 'POST') throw new ApiError(405, 'use POST to take a checkpoint')
       if (!config().checkpoints.enabled) throw new ApiError(404, 'checkpoints are switched off')
       const request = body as { session?: unknown; label?: unknown } | undefined
-      const workTree = requireWorkspace(ctx, query.get('workspace'))
       const sessionId = typeof request?.session === 'string' ? request.session : 'manual'
+      const workTree = await requireWorkspace(ctx, query.get('workspace'), sessionId)
       const label = typeof request?.label === 'string' && request.label.trim().length > 0
         ? request.label.trim()
         : 'manual checkpoint'
@@ -252,24 +279,24 @@ export function mountCheckpoints(
       if (!config().checkpoints.enabled) throw new ApiError(404, 'checkpoints are switched off')
       const id = query.get('id')
       if (id === null) throw new ApiError(400, 'a checkpoint id is required')
-      const workTree = requireWorkspace(ctx, query.get('workspace'), query.get('session') ?? undefined)
       const controller = new AbortController()
       req.on('close', () => { controller.abort() })
+      const workTree = await requireWorkspace(ctx, query.get('workspace'), query.get('session') ?? undefined, controller.signal)
       const { affected, unprotected } = await store.preview(workTree, id, controller.signal)
-      return { checkpointId: id, affected, unprotected }
+      return { checkpointId: id, workspace: workTree, affected, unprotected }
     },
 
     '/checkpoints/diff': async ({ query, req }) => {
       if (!config().checkpoints.enabled) throw new ApiError(404, 'checkpoints are switched off')
       const id = query.get('id')
       if (id === null) throw new ApiError(400, 'a checkpoint id is required')
-      const workTree = requireWorkspace(ctx, query.get('workspace'))
       const controller = new AbortController()
       req.on('close', () => { controller.abort() })
+      const workTree = await requireWorkspace(ctx, query.get('workspace'), query.get('session') ?? undefined, controller.signal)
       return { checkpointId: id, patch: await store.diff(workTree, id, controller.signal) }
     },
 
-    '/checkpoints/restore': async ({ body, method, query }) => {
+    '/checkpoints/restore': async ({ body, method, query, req }) => {
       if (method !== 'POST') throw new ApiError(405, 'use POST to restore a checkpoint')
       if (!config().checkpoints.enabled) throw new ApiError(404, 'checkpoints are switched off')
       const request = body as { id?: unknown; session?: unknown; confirm?: unknown } | undefined
@@ -281,9 +308,11 @@ export function mountCheckpoints(
       if (request?.confirm !== true) throw new ApiError(400, 'a restore requires confirm: true')
 
       const sessionId = typeof request.session === 'string' ? request.session : 'manual'
-      const workTree = requireWorkspace(ctx, query.get('workspace'), sessionId)
+      const controller = new AbortController()
+      req.on('close', () => { controller.abort() })
+      const workTree = await requireWorkspace(ctx, query.get('workspace'), sessionId, controller.signal)
       try {
-        const result = await serialize(workTree, () => store.restore(workTree, sessionId, request.id as string))
+        const result = await serialize(workTree, () => store.restore(workTree, sessionId, request.id as string, controller.signal))
         log.info('restored checkpoint %s in %s', request.id, workTree)
         return result
       } catch (error: unknown) {
@@ -295,7 +324,7 @@ export function mountCheckpoints(
       if (method !== 'POST') throw new ApiError(405, 'use POST to prune checkpoints')
       const current = config().checkpoints
       if (!current.enabled) throw new ApiError(404, 'checkpoints are switched off')
-      const workTree = requireWorkspace(ctx, query.get('workspace'))
+      const workTree = await requireWorkspace(ctx, query.get('workspace'))
       return { pruned: await store.prune(workTree, current.retentionDays) }
     },
 
@@ -305,7 +334,7 @@ export function mountCheckpoints(
       if ((body as { confirm?: unknown } | undefined)?.confirm !== true) {
         throw new ApiError(400, 'discarding a checkpoint history requires confirm: true')
       }
-      const workTree = requireWorkspace(ctx, query.get('workspace'))
+      const workTree = await requireWorkspace(ctx, query.get('workspace'))
       await store.forget(workTree)
       return { forgotten: workTree }
     },

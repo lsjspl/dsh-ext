@@ -1,31 +1,29 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 /**
- * The side panel's open tabs.
+ * The side panel's open tabs, isolated per workspace.
  *
- * The panel is a tab strip rather than a fixed two-pane layout because the
- * things it shows are unrelated jobs: a file browser is something you keep open
- * while reading, a change list is something you glance at, and a diff is
- * transient. Forcing them to share one scroll column meant the file tree was
- * always half a panel tall.
- *
- * Tabs are a persisted list, not component state: which views a user keeps open
- * is a preference, and losing it on every reload would make the `+` menu feel
- * like busywork.
+ * File paths are workspace-relative, so a tab from project A is meaningless in
+ * project B. Each workspace owns a separate state, subscriber set, and storage
+ * key. There is deliberately no module-global "active scope": the settings
+ * preview and the real panel can be mounted together without stealing each
+ * other's tab operations.
  */
 
-/** The views a tab can hold. */
 export type TabKind = 'files' | 'review' | 'editor' | 'diff'
 
 export interface Tab {
-  /** Stable across renders and reorders, so React keys and the active id agree. */
   readonly id: string
   readonly kind: TabKind
-  /**
-   * Workspace-relative path, for an `editor` tab. Absent on the singleton views,
-   * which describe the whole workspace.
-   */
   readonly path?: string
+}
+
+export interface TabStore {
+  readonly tabs: readonly Tab[]
+  readonly activeId: string
+  open(kind: TabKind, path?: string): void
+  select(id: string): void
+  close(id: string): void
 }
 
 interface TabState {
@@ -33,12 +31,14 @@ interface TabState {
   readonly activeId: string
 }
 
-const STORAGE_KEY = 'dsh-dev-tool-ext:side-panel-tabs'
+const STORAGE_PREFIX = 'dsh-dev-tool-ext:side-panel-tabs:'
+const LEGACY_STORAGE_KEY = 'dsh-dev-tool-ext:side-panel-tabs'
+const DEFAULT_SCOPE = 'unscoped'
 
-/**
- * The opening layout: the file browser and the review list — the two views the
- * panel is most often opened *for*.
- */
+function storageKey(scope: string): string {
+  return `${STORAGE_PREFIX}${encodeURIComponent(scope)}`
+}
+
 function initial(): TabState {
   return {
     tabs: [{ id: 'files', kind: 'files' }, { id: 'review', kind: 'review' }],
@@ -46,115 +46,129 @@ function initial(): TabState {
   }
 }
 
-/**
- * Editor and diff tabs are keyed by path so opening the same file twice focuses
- * the existing tab instead of stacking duplicates — the behaviour every editor
- * has.
- */
 function tabId(kind: TabKind, path?: string): string {
   return kind === 'editor' || kind === 'diff' ? `${kind}:${path ?? ''}` : kind
 }
 
-let state: TabState | undefined
-const listeners = new Set<() => void>()
-
-function read(): TabState {
+function parseState(stored: string | null): TabState | undefined {
+  if (stored === null) return undefined
   try {
-    const stored = window.localStorage.getItem(STORAGE_KEY)
-    if (stored === null) return initial()
     const parsed: unknown = JSON.parse(stored)
-    if (typeof parsed !== 'object' || parsed === null) return initial()
+    if (typeof parsed !== 'object' || parsed === null) return undefined
     const raw = (parsed as { tabs?: unknown }).tabs
-    if (!Array.isArray(raw)) return initial()
+    if (!Array.isArray(raw)) return undefined
     const tabs = raw.flatMap((entry): Tab[] => {
       if (typeof entry !== 'object' || entry === null) return []
       const rawKind = (entry as { kind?: unknown }).kind
-      // Storage written before the change list became the review list names the
-      // kind `changes`; map it forward rather than dropping the user's layout.
       const kind = rawKind === 'changes' ? 'review' : rawKind
       const path = (entry as { path?: unknown }).path
       if (kind !== 'files' && kind !== 'review' && kind !== 'editor' && kind !== 'diff') return []
-      // A tab with no path could never render anything; drop it rather than
-      // showing an empty pane with a close button.
       if ((kind === 'editor' || kind === 'diff') && typeof path !== 'string') return []
-      return [{ id: tabId(kind, typeof path === 'string' ? path : undefined), kind, ...(typeof path === 'string' ? { path } : {}) }]
+      return [{
+        id: tabId(kind, typeof path === 'string' ? path : undefined),
+        kind,
+        ...(typeof path === 'string' ? { path } : {}),
+      }]
     })
-    if (tabs.length === 0) return initial()
+    if (tabs.length === 0) return undefined
     const storedActive = (parsed as { activeId?: unknown }).activeId
     const activeId = typeof storedActive === 'string' && tabs.some(tab => tab.id === storedActive)
       ? storedActive
       : tabs[0]!.id
     return { tabs, activeId }
   } catch {
-    return initial()
+    return undefined
   }
 }
 
-function commit(next: TabState): void {
-  state = next
+function read(scope: string): TabState {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-  } catch { /* a browser refusing storage still gets working tabs */ }
-  for (const listener of [...listeners]) listener()
+    const own = parseState(window.localStorage.getItem(storageKey(scope)))
+    if (own !== undefined) return own
+
+    // The old key has no workspace identity. Migrating it would copy project A's
+    // relative file tabs into whichever project happens to load first — exactly
+    // the corruption this scoped store fixes. Drop it and start this workspace
+    // from Files/Review instead.
+    if (window.localStorage.getItem(LEGACY_STORAGE_KEY) !== null) {
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY)
+    }
+  } catch { /* unavailable storage gets an in-memory default */ }
+  return initial()
 }
 
-function current(): TabState {
-  if (state === undefined) state = read()
+const states = new Map<string, TabState>()
+const listeners = new Map<string, Set<() => void>>()
+
+function current(scope: string): TabState {
+  let state = states.get(scope)
+  if (state === undefined) {
+    state = read(scope)
+    states.set(scope, state)
+  }
   return state
 }
 
-/** Open a view, or focus it when it is already open. */
-export function openTab(kind: TabKind, path?: string): void {
-  const now = current()
+function commit(scope: string, next: TabState): void {
+  states.set(scope, next)
+  try {
+    window.localStorage.setItem(storageKey(scope), JSON.stringify(next))
+  } catch { /* a browser refusing storage still gets working tabs */ }
+  for (const listener of [...(listeners.get(scope) ?? [])]) listener()
+}
+
+function open(scope: string, kind: TabKind, path?: string): void {
+  const now = current(scope)
   const id = tabId(kind, path)
-  const existing = now.tabs.find(tab => tab.id === id)
-  if (existing !== undefined) {
-    if (now.activeId !== id) commit({ ...now, activeId: id })
+  if (now.tabs.some(tab => tab.id === id)) {
+    if (now.activeId !== id) commit(scope, { ...now, activeId: id })
     return
   }
   const tab: Tab = { id, kind, ...(path === undefined ? {} : { path }) }
-  commit({ tabs: [...now.tabs, tab], activeId: id })
+  commit(scope, { tabs: [...now.tabs, tab], activeId: id })
 }
 
-/** Focus an already-open tab. */
-export function selectTab(id: string): void {
-  const now = current()
+function select(scope: string, id: string): void {
+  const now = current(scope)
   if (now.activeId === id || !now.tabs.some(tab => tab.id === id)) return
-  commit({ ...now, activeId: id })
+  commit(scope, { ...now, activeId: id })
 }
 
-/**
- * Close a tab.
- *
- * Focus moves to the neighbour on the left, matching every tabbed editor: the
- * tab that was *next to* the one you closed is the one you were most likely
- * working with. Closing the last tab leaves the panel empty rather than
- * resurrecting a default — an empty panel with a `+` is self-explanatory, and
- * silently reopening a view the user just closed is not.
- */
-export function closeTab(id: string): void {
-  const now = current()
+function close(scope: string, id: string): void {
+  const now = current(scope)
   const index = now.tabs.findIndex(tab => tab.id === id)
   if (index < 0) return
   const tabs = now.tabs.filter(tab => tab.id !== id)
   if (now.activeId !== id) {
-    commit({ tabs, activeId: now.activeId })
+    commit(scope, { tabs, activeId: now.activeId })
     return
   }
   const neighbour = tabs[Math.max(0, index - 1)]
-  commit({ tabs, activeId: neighbour?.id ?? '' })
+  commit(scope, { tabs, activeId: neighbour?.id ?? '' })
 }
 
-/** Subscribe to the tab list. */
-export function useTabs(): TabState {
+export function useTabs(scope: string | undefined): TabStore {
   const [, bump] = useState(0)
-  const now = current()
+  const key = scope ?? DEFAULT_SCOPE
+  const now = current(key)
 
   useEffect(() => {
     const listener = () => { bump(n => n + 1) }
-    listeners.add(listener)
-    return () => { listeners.delete(listener) }
-  }, [])
+    let scoped = listeners.get(key)
+    if (scoped === undefined) {
+      scoped = new Set()
+      listeners.set(key, scoped)
+    }
+    scoped.add(listener)
+    return () => {
+      scoped.delete(listener)
+      if (scoped.size === 0) listeners.delete(key)
+    }
+  }, [key])
 
-  return now
+  const openBound = useCallback((kind: TabKind, path?: string) => { open(key, kind, path) }, [key])
+  const selectBound = useCallback((id: string) => { select(key, id) }, [key])
+  const closeBound = useCallback((id: string) => { close(key, id) }, [key])
+
+  return { ...now, open: openBound, select: selectBound, close: closeBound }
 }

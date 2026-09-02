@@ -3,7 +3,6 @@ import { INDENT, Notice, buttonStyle, rowStyle, token } from './ui.tsx'
 import { useT, type Translate } from './use-locale.ts'
 import { FileIcon, FolderIcon } from './file-icons.tsx'
 import { FilesIcon, ChevronIcon } from './icons.tsx'
-import { openTab } from './tabs.ts'
 import type { ChangeEntry, ExplorerStatus } from '../shared/api-contract.ts'
 
 /**
@@ -75,14 +74,20 @@ function countsFor(change: ChangeEntry, filter: ReviewFilter): { added: number; 
 const treeStyle = { listStyle: 'none', margin: 0, padding: 0 } as const
 
 /** One row, in the file tree's anatomy: porcelain letters, icon, name, counts, kind. */
-function ReviewRow(props: { change: ChangeEntry; label: string; depth: number; counts: { added: number; removed: number } | undefined }) {
+function ReviewRow(props: {
+  change: ChangeEntry
+  label: string
+  depth: number
+  counts: { added: number; removed: number } | undefined
+  onOpenDiff: (path: string) => void
+}) {
   const t = useT()
   const { change, counts } = props
   return (
     <li>
       <button
         type="button"
-        onClick={() => { openTab('diff', change.path) }}
+        onClick={() => { props.onOpenDiff(change.path) }}
         title={t('explorer.preview')}
         style={{ ...rowStyle, paddingLeft: 4 + props.depth * INDENT }}
       >
@@ -198,6 +203,7 @@ function FolderNodes(props: {
   collapsed: ReadonlySet<string>
   onToggle: (path: string) => void
   countsFor: (change: ChangeEntry) => { added: number; removed: number } | undefined
+  onOpenDiff: (path: string) => void
 }) {
   const { node, depth } = props
   const rows: ReactNode[] = []
@@ -211,7 +217,7 @@ function FolderNodes(props: {
         // the folder's key and collapses with it.
         <li key={`children-${dir.path}`}>
           <ul style={treeStyle}>
-            <FolderNodes node={dir} depth={depth + 1} collapsed={props.collapsed} onToggle={props.onToggle} countsFor={props.countsFor} />
+            <FolderNodes node={dir} depth={depth + 1} collapsed={props.collapsed} onToggle={props.onToggle} countsFor={props.countsFor} onOpenDiff={props.onOpenDiff} />
           </ul>
         </li>,
       )
@@ -225,6 +231,7 @@ function FolderNodes(props: {
         label={baseOf(file.path)}
         depth={depth}
         counts={props.countsFor(file)}
+        onOpenDiff={props.onOpenDiff}
       />,
     )
   }
@@ -234,7 +241,7 @@ function FolderNodes(props: {
 /**
  * @param status - the workspace's git status, refreshed by the panel's poll.
  */
-export function ReviewView(props: { status: ExplorerStatus }) {
+export function ReviewView(props: { status: ExplorerStatus; onOpenDiff: (path: string) => void }) {
   const t = useT()
   const [filter, setFilter] = useState<ReviewFilter>('all')
   const [grouped, setGrouped] = useState(false)
@@ -324,7 +331,7 @@ export function ReviewView(props: { status: ExplorerStatus }) {
         <div style={{ fontSize: 13, color: token.textMuted, padding: '8px 0' }}>{t('explorer.noChanges')}</div>
       ) : grouped && tree !== undefined ? (
         <ul style={treeStyle}>
-          <FolderNodes node={tree} depth={0} collapsed={collapsed} onToggle={onToggle} countsFor={rowCounts} />
+          <FolderNodes node={tree} depth={0} collapsed={collapsed} onToggle={onToggle} countsFor={rowCounts} onOpenDiff={props.onOpenDiff} />
         </ul>
       ) : (
         <ul style={treeStyle}>
@@ -335,6 +342,7 @@ export function ReviewView(props: { status: ExplorerStatus }) {
               label={change.path}
               depth={0}
               counts={rowCounts(change)}
+              onOpenDiff={props.onOpenDiff}
             />
           ))}
         </ul>

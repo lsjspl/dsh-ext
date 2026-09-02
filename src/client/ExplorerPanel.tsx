@@ -5,7 +5,7 @@ import { INDENT, Notice, rowStyle, token } from './ui.tsx'
 import { useT } from './use-locale.ts'
 import { FileIcon, FolderIcon } from './file-icons.tsx'
 import { ChevronIcon, CloseIcon, FilesIcon, GitIcon, PlusIcon, iconButtonStyle } from './icons.tsx'
-import { closeTab, openTab, selectTab, useTabs, type Tab } from './tabs.ts'
+import { useTabs, type Tab, type TabKind } from './tabs.ts'
 import { CodeView, DiffView } from './DiffView.tsx'
 import { ReviewView } from './ReviewView.tsx'
 import type { ExplorerStatus, FileView, TreeEntry } from '../shared/api-contract.ts'
@@ -98,6 +98,7 @@ function TreeRow(props: {
   scope: string
   expanded: ReadonlySet<string>
   onToggle: (path: string) => void
+  onOpenFile: (path: string) => void
 }) {
   const t = useT()
   const { entry, depth } = props
@@ -110,7 +111,7 @@ function TreeRow(props: {
   const row = (
     <button
       type="button"
-      onClick={() => { entry.kind === 'directory' ? props.onToggle(entry.path) : openTab('editor', entry.path) }}
+      onClick={() => { entry.kind === 'directory' ? props.onToggle(entry.path) : props.onOpenFile(entry.path) }}
       title={entry.kind === 'file' ? t('explorer.preview') : undefined}
       style={{ ...rowStyle, paddingLeft: 4 + depth * INDENT }}
     >
@@ -147,6 +148,7 @@ function TreeRow(props: {
                       scope={props.scope}
                       expanded={props.expanded}
                       onToggle={props.onToggle}
+                      onOpenFile={props.onOpenFile}
                     />
                   ))}
                 </ul>
@@ -166,7 +168,7 @@ function TreeRow(props: {
  * The root listing loads once; every directory below it loads the first time it
  * is expanded, the way an editor's file panel does.
  */
-function FilesView(props: { workspace: string | undefined; sessionId: string | undefined }) {
+function FilesView(props: { workspace: string | undefined; sessionId: string | undefined; onOpenFile: (path: string) => void }) {
   const t = useT()
   const scope = [
     props.workspace === undefined ? undefined : `&workspace=${encodeURIComponent(props.workspace)}`,
@@ -200,6 +202,7 @@ function FilesView(props: { workspace: string | undefined; sessionId: string | u
             scope={scope}
             expanded={expanded}
             onToggle={toggle}
+            onOpenFile={props.onOpenFile}
           />
         ))}
       </ul>
@@ -252,7 +255,13 @@ function EditorView(props: { path: string; scope: string }) {
  * offering the two workspace-wide views. Editor tabs are not on the `+` menu —
  * they exist per file and are opened from the tree, the way an editor does it.
  */
-function TabStrip(props: { tabs: readonly Tab[]; activeId: string }) {
+function TabStrip(props: {
+  tabs: readonly Tab[]
+  activeId: string
+  onOpen: (kind: TabKind, path?: string) => void
+  onSelect: (id: string) => void
+  onClose: (id: string) => void
+}) {
   const t = useT()
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -273,10 +282,10 @@ function TabStrip(props: { tabs: readonly Tab[]; activeId: string }) {
             aria-selected={active}
             tabIndex={0}
             title={tab.kind === 'editor' || tab.kind === 'diff' ? tab.path : undefined}
-            onClick={() => { selectTab(tab.id) }}
+            onClick={() => { props.onSelect(tab.id) }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
-                selectTab(tab.id)
+                props.onSelect(tab.id)
                 event.preventDefault()
               }
             }}
@@ -306,7 +315,7 @@ function TabStrip(props: { tabs: readonly Tab[]; activeId: string }) {
               aria-label={`${t('explorer.closeTab')}: ${label}`}
               onClick={(event) => {
                 event.stopPropagation()
-                closeTab(tab.id)
+                props.onClose(tab.id)
               }}
               style={{
                 display: 'inline-flex',
@@ -334,7 +343,7 @@ function TabStrip(props: { tabs: readonly Tab[]; activeId: string }) {
           setMenuOpen(false)
           // `openTab` focuses an already-open view instead of stacking a
           // duplicate, so selecting `files` twice is harmless.
-          openTab(id === 'files' ? 'files' : 'review')
+          props.onOpen(id === 'files' ? 'files' : 'review')
         }}
         align="start"
         // The strip sits inside the panel's scroll column; an in-place list
@@ -369,7 +378,11 @@ function TabStrip(props: { tabs: readonly Tab[]; activeId: string }) {
  */
 export function ExplorerPanel(props: { workspace?: string; sessionId?: string }) {
   const t = useT()
-  const { tabs, activeId } = useTabs()
+  // Tabs contain workspace-relative paths, so their persistence scope must be
+  // the workspace identity. A session id is a safe fallback while the browser
+  // has not resolved a workspace; the settings preview gets an isolated scope.
+  const tabScope = props.workspace ?? (props.sessionId === undefined ? 'settings-preview' : `session:${props.sessionId}`)
+  const { tabs, activeId, open: openPanelTab, select: selectPanelTab, close: closePanelTab } = useTabs(tabScope)
   const active = tabs.find(tab => tab.id === activeId)
   const scope = [
     props.workspace === undefined ? undefined : `workspace=${encodeURIComponent(props.workspace)}`,
@@ -404,7 +417,13 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
     // children shrink below their intrinsic size rather than overflowing it.
     <div data-dsh-plugin="dsh-dev-tool-ext" data-dsh-part="explorer" style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-        <TabStrip tabs={tabs} activeId={activeId} />
+        <TabStrip
+          tabs={tabs}
+          activeId={activeId}
+          onOpen={openPanelTab}
+          onSelect={selectPanelTab}
+          onClose={closePanelTab}
+        />
         {status.data?.branch !== undefined && (
           <span style={{ ...metaStyle, flex: '0 0 auto' }}>
             {status.data.branch}
@@ -421,9 +440,15 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
           {active?.kind === 'review' && (
             status.data === undefined
               ? <div style={{ fontSize: 13, color: token.textMuted }}>{t('common.loading')}</div>
-              : <ReviewView status={status.data} />
+              : <ReviewView status={status.data} onOpenDiff={(path) => { openPanelTab('diff', path) }} />
           )}
-          {active?.kind === 'files' && <FilesView workspace={props.workspace} sessionId={props.sessionId} />}
+          {active?.kind === 'files' && (
+            <FilesView
+              workspace={props.workspace}
+              sessionId={props.sessionId}
+              onOpenFile={(path) => { openPanelTab('editor', path) }}
+            />
+          )}
           {active?.kind === 'editor' && active.path !== undefined && <EditorView path={active.path} scope={scope} />}
           {active?.kind === 'diff' && active.path !== undefined && <DiffView path={active.path} scope={scope} />}
         </ViewBoundary>

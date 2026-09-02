@@ -54,7 +54,8 @@ export function CheckpointsPanel(props: { sessionId?: string; enabled: boolean }
   const askPreview = useCallback(async (id: string) => {
     setPreviewing(true)
     setNote(undefined)
-    const result = await callApi<RestorePreview>(`/checkpoints/preview?id=${encodeURIComponent(id)}`)
+    const scope = props.sessionId === undefined ? '' : `&session=${encodeURIComponent(props.sessionId)}`
+    const result = await callApi<RestorePreview>(`/checkpoints/preview?id=${encodeURIComponent(id)}${scope}`)
     setPreviewing(false)
     if (result.ok) setPending(result.value)
     else setNote(t('cp.previewFailed', { message: result.message }))
@@ -75,7 +76,8 @@ export function CheckpointsPanel(props: { sessionId?: string; enabled: boolean }
 
   const showDiff = useCallback(async (id: string) => {
     setDiff({ id, patch: 'Loading…' })
-    const result = await callApi<{ patch: string }>(`/checkpoints/diff?id=${encodeURIComponent(id)}`)
+    const scope = props.sessionId === undefined ? '' : `&session=${encodeURIComponent(props.sessionId)}`
+    const result = await callApi<{ patch: string }>(`/checkpoints/diff?id=${encodeURIComponent(id)}${scope}`)
     setDiff({
       id,
       patch: result.ok

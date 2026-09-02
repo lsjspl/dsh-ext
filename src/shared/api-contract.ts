@@ -202,6 +202,8 @@ export interface MessageCheckpointView {
 
 export interface RestorePreview {
   readonly checkpointId: string
+  /** Absolute workspace root the restore will modify. */
+  readonly workspace?: string
   /** Paths a restore would overwrite or delete, relative to the workspace. */
   readonly affected: readonly string[]
   /**

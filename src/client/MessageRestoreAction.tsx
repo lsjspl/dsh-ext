@@ -22,9 +22,10 @@ export function MessageRestoreAction(props: { messageId: string; sessionId: stri
   const [open, setOpen] = useState(false)
   const [preview, setPreview] = useState<RestorePreview | undefined>(undefined)
   const [busy, setBusy] = useState(false)
+  const [noChanges, setNoChanges] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const checkpoint = resource.data?.checkpoint
-  const available = checkpoint !== undefined && checkpoint !== null
+  const available = checkpoint !== undefined && checkpoint !== null && !noChanges
 
   // Every finalized answer gets the same action position. An answer that did
   // not mutate files keeps a disabled affordance instead of making the action
@@ -37,8 +38,16 @@ export function MessageRestoreAction(props: { messageId: string; sessionId: stri
     setPreview(undefined)
     setError(undefined)
     const result = await callApi<RestorePreview>(`/checkpoints/preview?id=${encodeURIComponent(checkpoint.id)}&session=${encodeURIComponent(props.sessionId)}`)
-    if (result.ok) setPreview(result.value)
-    else setError(result.message)
+    if (!result.ok) {
+      setError(result.message)
+      return
+    }
+    if (result.value.affected.length === 0) {
+      setNoChanges(true)
+      setOpen(false)
+      return
+    }
+    setPreview(result.value)
   }
 
   const restore = async () => {
@@ -100,7 +109,7 @@ export function MessageRestoreAction(props: { messageId: string; sessionId: stri
               </button>
               <button
                 type="button"
-                disabled={busy || preview === undefined}
+                disabled={busy || preview === undefined || preview.affected.length === 0}
                 onClick={() => { void restore() }}
                 style={{ ...buttonStyle, borderColor: token.danger, color: token.danger }}
               >
@@ -115,8 +124,15 @@ export function MessageRestoreAction(props: { messageId: string; sessionId: stri
             )}
             {preview !== undefined && (
               <>
+                {preview.workspace !== undefined && (
+                  <div style={{ fontSize: 11, color: token.textMuted }}>
+                    {t('cp.restoreWorkspace', { path: preview.workspace })}
+                  </div>
+                )}
                 <p style={{ margin: 0, lineHeight: 1.55, color: token.textSecondary }}>
-                  {t('cp.restoreAnswerHint', { n: preview.affected.length })}
+                  {preview.affected.length === 0
+                    ? t('cp.restoreAnswerNoop')
+                    : t('cp.restoreAnswerHint', { n: preview.affected.length })}
                 </p>
                 {preview.unprotected.length > 0 && (
                   <Notice kind="error">
