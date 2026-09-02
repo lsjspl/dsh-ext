@@ -124,6 +124,7 @@ const storeBundle = join(process.cwd(), 'lib', 'checkpoint-store.verify.mjs')
 const verifyEntry = join(process.cwd(), 'src', 'checkpoints.verify.entry.ts')
 writeFileSync(verifyEntry, [
   "export { CheckpointStore } from './checkpoint-store.ts'",
+  "export { turnForMessageEvents } from './features/checkpoints.ts'",
   "export { DEFAULT_CHECKPOINT_EXCLUDES } from './config.ts'",
 ].join(String.fromCharCode(10)))
 await build({
@@ -135,12 +136,28 @@ await build({
   packages: 'external',
   logLevel: 'error',
 })
-const { CheckpointStore, DEFAULT_CHECKPOINT_EXCLUDES } = await import(pathToFileURL(storeBundle).href)
+const { CheckpointStore, DEFAULT_CHECKPOINT_EXCLUDES, turnForMessageEvents } = await import(pathToFileURL(storeBundle).href)
 rmSync(verifyEntry, { force: true })
 
 // The excludes and cap the plugin actually ships with, so this exercises the
 // configuration users get rather than one invented for the test.
 const store = new CheckpointStore(shadowRoot, DEFAULT_CHECKPOINT_EXCLUDES, 32)
+
+process.stdout.write('Message-to-turn mapping:\n')
+const messageEvents = [
+  { type: 'turn/start', data: { turn: 3 } },
+  { type: 'assistant/message', data: { turn: 3, step: 0, message: { id: 'answer-a' } } },
+  { type: 'tool/call', data: { turn: 3, step: 0, callId: 'call-a' } },
+  { type: 'assistant/message', data: { turn: 3, step: 1, message: { id: 'answer-b' } } },
+  { type: 'turn/end', data: { turn: 3 } },
+  { type: 'assistant/message', data: { turn: 4, step: 0, message: { id: 'answer-c' } } },
+]
+report('first assistant step maps to its turn', turnForMessageEvents(messageEvents, 'answer-a') === 3)
+report('closing assistant step maps to the same turn', turnForMessageEvents(messageEvents, 'answer-b') === 3)
+report('a later answer maps to its own turn', turnForMessageEvents(messageEvents, 'answer-c') === 4)
+report('a missing message gets no checkpoint mapping', turnForMessageEvents(messageEvents, 'missing') === undefined)
+report('a tool call id cannot masquerade as a message id', turnForMessageEvents(messageEvents, 'call-a') === undefined)
+process.stdout.write('\n')
 
 process.stdout.write('Taking checkpoint 1…\n')
 const first = await store.snapshot(project, 'session-a', 'before the first edit')
@@ -156,6 +173,17 @@ rmSync(join(project, 'untracked.txt'))
 
 process.stdout.write('Taking checkpoint 2…\n')
 const second = await store.snapshot(project, 'session-a', 'after the agent edit')
+
+process.stdout.write('Turn checkpoint refs:\n')
+await store.linkTurn(project, 'session-a', 7, first.id)
+report('a turn resolves to its linked pre-mutation checkpoint',
+  await store.resolveTurn(project, 'session-a', 7) === first.id)
+report('another session cannot see that turn link',
+  await store.resolveTurn(project, 'session-b', 7) === undefined)
+await store.linkTurn(project, 'session-a', 7, second.id)
+report('a later tool does not overwrite the turn\'s first restore point',
+  await store.resolveTurn(project, 'session-a', 7) === first.id)
+process.stdout.write('\n')
 
 process.stdout.write(`Restoring checkpoint 1 (${first.id.slice(0, 8)})…\n\n`)
 const restored = await store.restore(project, 'session-a', first.id)

@@ -344,6 +344,30 @@ export class CheckpointStore {
     return rows
   }
 
+  /**
+   * Bind one session turn to the checkpoint that preceded its first mutation.
+   *
+   * A snapshot whose tree equals HEAD reuses that commit (`created: false`), so
+   * the commit message cannot carry this turn's identity. A private shadow-git
+   * ref supplies the missing durable association without creating empty commits.
+   * The expected-old value is all zeroes: only the first tool in a turn wins,
+   * which is also correct under snapshotOn:tool.
+   */
+  async linkTurn(workTree: string, sessionId: string, turn: number, checkpointId: string): Promise<void> {
+    const repo = this.repoFor(workTree)
+    const ref = `refs/dsh-turns/${workspaceKey(sessionId)}/${turn}`
+    const missing = '0000000000000000000000000000000000000000'
+    await git(['update-ref', ref, checkpointId, missing], { cwd: workTree, env: this.env(repo) })
+  }
+
+  /** The exact pre-mutation checkpoint previously linked to this session turn. */
+  async resolveTurn(workTree: string, sessionId: string, turn: number, signal?: AbortSignal): Promise<string | undefined> {
+    const repo = this.repoFor(workTree)
+    const ref = `refs/dsh-turns/${workspaceKey(sessionId)}/${turn}`
+    const result = await git(['rev-parse', '--verify', ref], { cwd: workTree, env: this.env(repo), signal })
+    return result.ok ? result.stdout.trim() : undefined
+  }
+
   /** Paths one checkpoint would change, and which of those the user's git does not hold. */
   async preview(workTree: string, checkpointId: string, signal?: AbortSignal): Promise<{ affected: string[]; unprotected: string[] }> {
     const repo = this.repoFor(workTree)

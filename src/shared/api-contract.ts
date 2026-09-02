@@ -193,6 +193,13 @@ export interface CheckpointRow {
   readonly baseline: boolean
 }
 
+/** One assistant answer's exact pre-mutation checkpoint, when that turn wrote files. */
+export type MessageCheckpoint = CheckpointRow
+
+export interface MessageCheckpointView {
+  readonly checkpoint: MessageCheckpoint | null
+}
+
 export interface RestorePreview {
   readonly checkpointId: string
   /** Paths a restore would overwrite or delete, relative to the workspace. */

@@ -13,6 +13,7 @@ import type { InputTriggerServiceContract } from '@deepseek-ai/dsh-client-ui-inp
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import { SettingsPage } from './SettingsPage.tsx'
+import { MessageRestoreAction } from './MessageRestoreAction.tsx'
 import { ComposerImages } from './ComposerImages.tsx'
 import { SidePanel } from './SidePanel.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
@@ -101,6 +102,7 @@ export function apply(ctx: Context): void {
   registerModelPicker(ctx)
   registerBalanceBadge(ctx)
   registerAutoReviewMode(ctx)
+  registerMessageRestoreActions(ctx)
   registerSidePanel(ctx)
   registerExplorerToggles(ctx)
   registerOpenEditorLauncher(ctx)
@@ -453,6 +455,29 @@ function registerAutoReviewMode(ctx: Context): void {
           {t('review.autoChip')}
         </button>
       )
+    }))
+  })
+}
+
+/**
+ * Feature 8's per-answer restore affordance.
+ *
+ * The host declares this list seat on finalized assistant action rows and owns
+ * the addressed message id. The seat is session-scoped, so `inject(sessionId)`
+ * binds the other half of the lookup without reading global panel state.
+ */
+function registerMessageRestoreActions(ctx: Context): void {
+  trySlot('assistant checkpoint restore', () => {
+    ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({
+      name: 'conversation.chat.assistant-actions',
+      id: 'dsh-dev-tool-ext-restore',
+      order: 20,
+      registrant: 'dsh-dev-tool-ext',
+      inject: (sessionId) => ({ sessionId: String(sessionId) }),
+    }, function DevToolMessageRestoreAction(props: { messageId: string; sessionId: string }) {
+      const config = useClientConfig()
+      if (config?.checkpoints.enabled !== true) return null
+      return <MessageRestoreAction messageId={props.messageId} sessionId={props.sessionId} />
     }))
   })
 }

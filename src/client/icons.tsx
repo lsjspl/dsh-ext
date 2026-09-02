@@ -185,6 +185,18 @@ export function PaperclipIcon(props: IconProps) {
   )
 }
 
+/** A history arrow around a checkpoint dot — restore this answer's workspace. */
+export function RestoreIcon(props: IconProps) {
+  const size = props.size ?? 16
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3.1 5.2H6.2V2.1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.5 5.1A5.4 5.4 0 1 1 2.8 9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="8" cy="8" r="1.45" fill="currentColor" />
+    </svg>
+  )
+}
+
 /** A branch with two commits, for the changes tab. */
 export function GitIcon(props: IconProps) {
   const size = props.size ?? 16
