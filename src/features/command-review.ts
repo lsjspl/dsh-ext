@@ -5,7 +5,7 @@ import { appendFile, mkdir, readFile, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
-import type { Config, CommandReviewConfig } from '../config.ts'
+import { DEFAULT_DELETE_PATTERNS, DEFAULT_READ_PATTERNS, type Config, type CommandReviewConfig } from '../config.ts'
 import type { AuditEntry, ReviewVerdict } from '../shared/api-contract.ts'
 
 /**
@@ -83,6 +83,52 @@ function compilePatterns(patterns: readonly string[], warn: (message: string, de
     }
   }
   return compiled
+}
+
+/**
+ * A shell fallback for tools that do not expose concurrency/read-only metadata.
+ * The patterns live in settings; this helper is exported so parser verification
+ * covers the exact classification the hot path uses.
+ */
+export function isReadOnlyCommand(command: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some(pattern => {
+    pattern.lastIndex = 0
+    return pattern.test(command)
+  })
+}
+
+/**
+ * Match an absolute deletion rule against both the tool identity and the full
+ * argument/command text. A dedicated `delete_file` tool has no shell verb in
+ * its arguments; a shell runner has the opposite shape, so both are needed.
+ */
+export function deletionPattern(
+  tool: string,
+  command: string,
+  patterns: readonly RegExp[],
+): RegExp | undefined {
+  const candidate = `tool:${tool}\n${command}`
+  return patterns.find(pattern => {
+    pattern.lastIndex = 0
+    return pattern.test(candidate)
+  })
+}
+
+/**
+ * Decide whether the proposed call is read-only.
+ *
+ * The host's scheduler already treats `isConcurrencySafe(args) === true` as
+ * the canonical signal that a call may overlap because it does not mutate
+ * parent-owned state, so reuse that fact first. Shell runners commonly omit
+ * the metadata because arbitrary commands can be either; configured read
+ * patterns are the fallback for those.
+ */
+function isReadOnlyCall(ctx: Context, exec: ToolExecution, command: string, patterns: readonly RegExp[]): boolean {
+  try {
+    const definition = ctx.get('tools')?.get(exec.name, exec.agent as never)
+    if (definition?.isConcurrencySafe?.(exec.arguments) === true) return true
+  } catch { /* unknown tool metadata falls through to shell patterns */ }
+  return isReadOnlyCommand(command, patterns)
 }
 
 interface ModelVerdict {
@@ -243,6 +289,10 @@ export function mountCommandReview(
   // call must not pay for regex construction, and settings can change at any time.
   let patternSource: readonly string[] | undefined
   let patterns: RegExp[] = []
+  let readPatternSource: readonly string[] | undefined
+  let readPatterns: RegExp[] = []
+  let deletePatternSource: readonly string[] | undefined
+  let deletePatterns: RegExp[] = []
   function screeningPatterns(settings: CommandReviewConfig): RegExp[] {
     if (settings.denyPatterns !== patternSource) {
       patternSource = settings.denyPatterns
@@ -250,17 +300,57 @@ export function mountCommandReview(
     }
     return patterns
   }
+  function readOnlyPatterns(settings: CommandReviewConfig): RegExp[] {
+    const source = settings.readPatterns ?? DEFAULT_READ_PATTERNS
+    if (source !== readPatternSource) {
+      readPatternSource = source
+      readPatterns = compilePatterns(source, warn)
+    }
+    return readPatterns
+  }
+  function absoluteDeletePatterns(settings: CommandReviewConfig): RegExp[] {
+    const source = settings.deletePatterns ?? DEFAULT_DELETE_PATTERNS
+    if (source !== deletePatternSource) {
+      deletePatternSource = source
+      deletePatterns = compilePatterns(source, warn)
+    }
+    return deletePatterns
+  }
 
   const dispose = ctx.on('tools/pre-execute', async function (exec: ToolExecution, next): Promise<PreToolDecision> {
     const settings = config().commandReview
     if (!settings.enabled) return await next()
-    if (!settings.tools.includes(exec.name)) return await next()
 
     const command = commandText(exec.arguments)
     if (command.trim().length === 0) return await next()
+    const excerpt = command.length > MAX_AUDIT_CHARS ? `${command.slice(0, MAX_AUDIT_CHARS)}…` : command
+
+    // Absolute deletion denial is deliberately BEFORE the reviewed-tools list,
+    // read-only classification, local screening, model call, and human fallback.
+    // No later layer gets an opportunity to allow a recognized delete.
+    if (settings.absoluteDenyDelete ?? true) {
+      const matchedDelete = deletionPattern(exec.name, command, absoluteDeletePatterns(settings))
+      if (matchedDelete !== undefined) {
+        const reason = `deletion is absolutely prohibited by rule: ${matchedDelete.source}`
+        audit.record({
+          at: Date.now(),
+          tool: exec.name,
+          command: excerpt,
+          verdict: 'deny',
+          reason,
+          decidedBy: 'rules',
+          matched: matchedDelete.source,
+        })
+        return { kind: 'deny', reason }
+      }
+    }
+
+    if (!settings.tools.includes(exec.name)) return await next()
+    if ((settings.writeOnly ?? true) && isReadOnlyCall(ctx, exec, command, readOnlyPatterns(settings))) {
+      return await next()
+    }
 
     const matched = screeningPatterns(settings).find(pattern => pattern.test(command))
-    const excerpt = command.length > MAX_AUDIT_CHARS ? `${command.slice(0, MAX_AUDIT_CHARS)}…` : command
 
     const finish = (verdict: ReviewVerdict, reason: string, decidedBy: AuditEntry['decidedBy']): PreToolDecision => {
       audit.record({

@@ -14,13 +14,16 @@ import type { BalanceView as BalanceData } from '../shared/api-contract.ts'
  * is burning tokens.
  */
 
-/** Is `now` inside one of the configured UTC peak windows (`HH:MM-HH:MM`)? */
+/** Is `now` inside one configured Beijing-time peak window (`HH:MM-HH:MM`)? */
 export function isPeakNow(windows: readonly string[], weekdaysOnly: boolean, now = new Date()): boolean {
+  // Convert the instant to a synthetic UTC date whose UTC fields are Beijing
+  // wall-clock fields. This avoids depending on the machine's local timezone.
+  const beijing = new Date(now.getTime() + 8 * 60 * 60 * 1000)
   if (weekdaysOnly) {
-    const day = now.getUTCDay()
+    const day = beijing.getUTCDay()
     if (day === 0 || day === 6) return false
   }
-  const minutes = now.getUTCHours() * 60 + now.getUTCMinutes()
+  const minutes = beijing.getUTCHours() * 60 + beijing.getUTCMinutes()
   return windows.some(window => {
     const match = /^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$/.exec(window)
     if (match === null) return false
@@ -143,7 +146,7 @@ export function BalanceBadge() {
   const config = useClientConfig()
   const balance = config?.deepseekBalance
   const pollSeconds = balance?.pollSeconds ?? 30
-  const peakWindows = balance?.peakWindowsUtc ?? ['01:00-04:00', '06:00-10:00']
+  const peakWindows = balance?.peakWindowsBeijing ?? ['09:00-12:00', '14:00-18:00']
   const weekdaysOnly = balance?.peakWeekdaysOnly ?? true
 
   // `refresh=1` bypasses the backend cache — the point of the poll is a fresh

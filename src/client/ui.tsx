@@ -47,20 +47,46 @@ export const token = {
   success: 'var(--dsw-alias-state-success-primary, #22c55e)',
 } as const
 
-export function Section(props: { title: string; description?: string; children: ReactNode }) {
+export function Section(props: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {
   return (
     <section
       data-dsh-plugin="dsh-dev-tool-ext"
       data-dsh-part="section"
-      style={{ borderBottom: `1px solid ${token.border}`, padding: '16px 0', color: token.text }}
+      style={{ padding: '18px 0 20px', color: token.text }}
     >
-      <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: token.text }}>{props.title}</h3>
-      {props.description !== undefined && (
-        <p style={{ margin: '4px 0 0', fontSize: 12, lineHeight: 1.5, color: token.textMuted }}>
-          {props.description}
-        </p>
-      )}
-      <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div
+        data-dsh-part="section-header"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 14,
+          padding: '10px 12px',
+          borderLeft: `3px solid ${token.accent}`,
+          background: token.hover,
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h3 style={{ margin: 0, fontSize: 15, lineHeight: 1.35, fontWeight: 600, color: token.text }}>
+            {props.title}
+          </h3>
+          {props.description !== undefined && (
+            <p style={{ margin: '4px 0 0', fontSize: 11, lineHeight: 1.5, color: token.textMuted }}>
+              {props.description}
+            </p>
+          )}
+        </div>
+        {props.action !== undefined && <div style={{ flex: '0 0 auto', alignSelf: 'flex-start', paddingTop: 1 }}>{props.action}</div>}
+      </div>
+      <div
+        data-dsh-part="section-items"
+        style={{
+          marginLeft: 15,
+          paddingLeft: 14,
+          borderLeft: `1px solid ${token.border}`,
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
         {props.children}
       </div>
     </section>
@@ -69,32 +95,69 @@ export function Section(props: { title: string; description?: string; children: 
 
 export function Row(props: { label: string; hint?: string; control: ReactNode }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'space-between' }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, color: token.text }}>{props.label}</div>
+    <div
+      data-dsh-part="setting-row"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 18,
+        justifyContent: 'space-between',
+        minHeight: 42,
+        padding: '9px 4px 9px 0',
+        borderBottom: `1px solid color-mix(in srgb, ${token.border} 55%, transparent)`,
+      }}
+    >
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 13, lineHeight: 1.35, fontWeight: 500, color: token.text }}>{props.label}</div>
         {props.hint !== undefined && (
-          <div style={{ fontSize: 11, color: token.textMuted, marginTop: 2 }}>{props.hint}</div>
+          <div style={{ fontSize: 11, lineHeight: 1.45, color: token.textMuted, marginTop: 3 }}>{props.hint}</div>
         )}
       </div>
-      <div style={{ flex: '0 0 auto' }}>{props.control}</div>
+      <div style={{ flex: '0 0 auto', maxWidth: '55%' }}>{props.control}</div>
     </div>
   )
 }
 
 export function Toggle(props: { checked: boolean; disabled?: boolean; onChange: (next: boolean) => void; label: string }) {
+  const disabled = props.disabled === true
   return (
-    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: props.disabled === true ? 'not-allowed' : 'pointer' }}>
-      <input
-        type="checkbox"
-        checked={props.checked}
-        disabled={props.disabled === true}
-        aria-label={props.label}
-        onChange={event => { props.onChange(event.currentTarget.checked) }}
-        // The accent keeps the native control on-theme; without it a checkbox
-        // renders in the browser's own blue regardless of the skin.
-        style={{ accentColor: token.accent, cursor: 'inherit' }}
+    <button
+      type="button"
+      role="switch"
+      aria-checked={props.checked}
+      aria-label={props.label}
+      disabled={disabled}
+      onClick={() => { props.onChange(!props.checked) }}
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        width: 36,
+        height: 20,
+        padding: 2,
+        border: `1px solid ${props.checked ? token.accent : token.border}`,
+        borderRadius: 999,
+        background: props.checked ? token.accent : token.surface,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
+        transition: 'background 140ms ease, border-color 140ms ease, opacity 140ms ease',
+        flex: '0 0 auto',
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          display: 'block',
+          width: 14,
+          height: 14,
+          borderRadius: '50%',
+          background: props.checked ? 'var(--dsw-alias-bg-base, #fff)' : token.textMuted,
+          boxShadow: '0 1px 2px color-mix(in srgb, #000 35%, transparent)',
+          transform: props.checked ? 'translateX(16px)' : 'translateX(0)',
+          transition: 'transform 140ms ease, background 140ms ease',
+        }}
       />
-    </label>
+    </button>
   )
 }
 
@@ -206,6 +269,50 @@ export function TextField(props: {
 }
 
 /** A bounded number field. Same commit-on-blur contract as {@link TextField}. */
+export function TextAreaField(props: {
+  value: string
+  disabled?: boolean
+  placeholder?: string
+  label: string
+  width?: number
+  rows?: number
+  onCommit: (next: string) => void
+}) {
+  const [draft, setDraft] = useState(props.value)
+  const [editing, setEditing] = useState(false)
+  if (!editing && draft !== props.value) setDraft(props.value)
+
+  const commit = () => {
+    setEditing(false)
+    const next = draft.trim()
+    if (next !== props.value) props.onCommit(next)
+  }
+
+  return (
+    <textarea
+      value={draft}
+      aria-label={props.label}
+      placeholder={props.placeholder}
+      disabled={props.disabled}
+      rows={props.rows ?? 6}
+      onFocus={() => { setEditing(true) }}
+      onChange={(event) => { setDraft(event.currentTarget.value) }}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') { setDraft(props.value); setEditing(false); event.currentTarget.blur() }
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') event.currentTarget.blur()
+      }}
+      style={{
+        ...inputStyle,
+        width: props.width ?? 320,
+        resize: 'vertical',
+        fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+        lineHeight: 1.45,
+      }}
+    />
+  )
+}
+
 export function NumberField(props: {
   value: number
   min: number

@@ -417,7 +417,7 @@ function registerAutoReviewMode(ctx: Context): void {
       const { view, busy, setMany } = useConfig()
       if (view === undefined) return null
       const review = view.value.commandReview
-      const enabled = review.enabled === true && review.mode === 'all'
+      const enabled = review.enabled === true && review.mode === 'all' && (review.writeOnly ?? true)
       return (
         <button
           type="button"
@@ -430,6 +430,8 @@ function registerAutoReviewMode(ctx: Context): void {
               : [
                   { path: ['commandReview', 'enabled'], value: true },
                   { path: ['commandReview', 'mode'], value: 'all' },
+                  { path: ['commandReview', 'writeOnly'], value: true },
+                  { path: ['commandReview', 'absoluteDenyDelete'], value: true },
                   { path: ['commandReview', 'onFailure'], value: 'ask' },
                 ])
           }}

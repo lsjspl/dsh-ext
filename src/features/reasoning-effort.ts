@@ -65,6 +65,11 @@ interface PiAiModelEntry {
  */
 type ModelField = 'reasoningEfforts' | 'inputModalities'
 
+/** The complete adapter map written when a model has no explicit ladder. */
+function defaultStoredEfforts(): Record<string, string | null> {
+  return Object.fromEntries(DEFAULT_EFFORT_LADDER.map(rung => [rung.id, rung.wire]))
+}
+
 interface PiAiProfile {
   readonly displayName?: unknown
   readonly models?: unknown
@@ -212,6 +217,91 @@ export function mountReasoningEffort(
     return { value: descriptor.value, revision: descriptor.revision, writable: true }
   }
 
+  /**
+   * Materialize the global defaults into the pi-ai namespace.
+   *
+   * Defaults must reach the adapter's model metadata, not merely decorate this
+   * settings page: the host gates image attachments and the composer effort
+   * picker against resolved model info. Missing fields are filled; any explicit
+   * per-model statement — including `false` reasoning or text-only modalities —
+   * wins and is never overwritten.
+   */
+  async function reconcileDefaults(signal?: AbortSignal): Promise<void> {
+    const settings = ctx.get('settings')
+    const defaults = config().reasoningEffort
+    const fullEfforts = defaults.defaultFullEfforts ?? true
+    const vision = defaults.defaultVision ?? true
+    if (settings === undefined || (!fullEfforts && !vision)) return
+
+    const section = piAiSection()
+    if (!section.writable) return
+    const profiles = readProfiles(section.value)
+    const llm = ctx.get('llm')
+    const ops: SettingsPathOp[] = []
+
+    for (const [route, profile] of Object.entries(profiles)) {
+      const declared = Array.isArray(profile.models) ? profile.models as readonly PiAiModelEntry[] : undefined
+      if (declared !== undefined) {
+        let changed = false
+        const models = declared.map(entry => {
+          let next = entry
+          if (fullEfforts && entry.reasoningEfforts === undefined) {
+            next = { ...next, reasoningEfforts: defaultStoredEfforts() }
+            changed = true
+          }
+          if (vision && entry.inputModalities === undefined) {
+            next = { ...next, inputModalities: ['text', 'image'] }
+            changed = true
+          }
+          return next
+        })
+        if (changed) {
+          ops.push({ op: 'set', path: ['providers', route, 'models'], value: models as never })
+        }
+        continue
+      }
+
+      const overrides = typeof profile.modelOverrides === 'object' && profile.modelOverrides !== null
+        ? profile.modelOverrides as Record<string, PiAiModelEntry>
+        : {}
+      const ids = new Set(Object.keys(overrides))
+      if (llm !== undefined) {
+        try {
+          for (const model of await llm.listModels(route)) {
+            if (signal?.aborted === true) return
+            ids.add(model.id)
+          }
+        } catch { /* dormant route: its existing overrides are still reconciled */ }
+      }
+      for (const id of ids) {
+        const override = overrides[id]
+        if (fullEfforts && override?.reasoningEfforts === undefined) {
+          ops.push({
+            op: 'set',
+            path: ['providers', route, 'modelOverrides', id, 'reasoningEfforts'],
+            value: defaultStoredEfforts() as never,
+          })
+        }
+        if (vision && override?.inputModalities === undefined) {
+          ops.push({
+            op: 'set',
+            path: ['providers', route, 'modelOverrides', id, 'inputModalities'],
+            value: ['text', 'image'] as never,
+          })
+        }
+      }
+    }
+
+    if (ops.length === 0) return
+    try {
+      await settings.mutate(PI_AI_NAMESPACE, ops, section.revision)
+    } catch (error: unknown) {
+      // A concurrent Models-page write wins. The next directory update or page
+      // read retries from the fresh revision rather than clobbering it.
+      ctx.logger('dsh-dev-tool-ext').warn('could not apply default model capabilities: %o', error)
+    }
+  }
+
   async function describe(signal?: AbortSignal): Promise<{ providers: EffortProvider[]; revision: number; writable: boolean; ladder: readonly EffortRung[] }> {
     const section = piAiSection()
     const profiles = readProfiles(section.value)
@@ -250,7 +340,9 @@ export function mountReasoningEffort(
         const declaredEntry = declared.find(entry => entry.id === id)
         const overrideEntry = overrides[id]
         // The override wins, exactly as the adapter layers them.
-        const effective = overrideEntry?.reasoningEfforts ?? declaredEntry?.reasoningEfforts
+        const effective = overrideEntry?.reasoningEfforts
+          ?? declaredEntry?.reasoningEfforts
+          ?? (config().reasoningEffort.defaultFullEfforts ? defaultStoredEfforts() : undefined)
         let adapterEfforts: EffortRung[] = []
         if (live.has(route) && llm !== undefined && effective === undefined) {
           try {
@@ -269,7 +361,7 @@ export function mountReasoningEffort(
         const declaredModalities = overrideEntry?.inputModalities ?? declaredEntry?.inputModalities
         let vision: boolean | undefined = Array.isArray(declaredModalities)
           ? declaredModalities.includes('image')
-          : undefined
+          : config().reasoningEffort.defaultVision ? true : undefined
         if (vision === undefined && live.has(route) && llm !== undefined) {
           try {
             const resolved = await llm.resolveModelInfo(route, id, signal)
@@ -350,11 +442,20 @@ export function mountReasoningEffort(
     return await describe()
   }
 
-  return installRoutes(routes, {
+  // Apply immediately and whenever the live model directory changes, so a
+  // provider added after plugin startup receives the same defaults.
+  const defaultController = new AbortController()
+  void reconcileDefaults(defaultController.signal)
+  const disposeAdapters = ctx.on('llm/adapters-updated', () => {
+    void reconcileDefaults(defaultController.signal)
+  })
+
+  const disposeRoutes = installRoutes(routes, {
     '/efforts': async ({ req }) => {
       if (!config().reasoningEffort.enabled) throw new ApiError(404, 'the reasoning-effort editor is switched off')
       const controller = new AbortController()
       req.on('close', () => { controller.abort() })
+      await reconcileDefaults(controller.signal)
       return await describe(controller.signal)
     },
 
@@ -387,4 +488,10 @@ export function mountReasoningEffort(
       return await writeModelField('inputModalities', request, value)
     },
   })
+
+  return () => {
+    defaultController.abort()
+    disposeAdapters()
+    disposeRoutes()
+  }
 }

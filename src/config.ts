@@ -14,6 +14,10 @@ export interface ImageComposerConfig {
 
 export interface ReasoningEffortConfig {
   enabled: boolean
+  /** Apply the complete effort ladder to every pi-ai model without an explicit declaration. */
+  defaultFullEfforts: boolean
+  /** Declare image input for every pi-ai model without an explicit modality declaration. */
+  defaultVision: boolean
 }
 
 /**
@@ -34,8 +38,8 @@ export interface DeepseekBalanceConfig {
   headerBadge: boolean
   /** Badge poll interval in seconds; 0 disables polling. */
   pollSeconds: number
-  /** DeepSeek peak windows in UTC (`HH:MM-HH:MM`); rates are half outside them. */
-  peakWindowsUtc: string[]
+  /** DeepSeek peak windows in Beijing time (`HH:MM-HH:MM`); rates are half outside them. */
+  peakWindowsBeijing: string[]
   /** Weekend usage is always off-peak, per the official scheme. */
   peakWeekdaysOnly: boolean
 }
@@ -47,6 +51,14 @@ export interface CommandReviewConfig {
   enabled: boolean
   mode: CommandReviewMode
   tools: string[]
+  /** Skip tool calls the host classifies as concurrency-safe/read-only. */
+  writeOnly: boolean
+  /** Shell-command fallbacks considered read-only when tool metadata is unavailable. */
+  readPatterns: string[]
+  /** Deny recognized deletion operations before model or human review. */
+  absoluteDenyDelete: boolean
+  /** Regular expressions matched against `tool:<name>\n<arguments/command>`. */
+  deletePatterns: string[]
   provider: string
   model: string
   timeoutMs: number
@@ -121,6 +133,27 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = [
   '\\bkubectl\\s+delete\\b',
 ]
 
+export const DEFAULT_READ_PATTERNS: readonly string[] = [
+  '^\\s*(pwd|cd|ls|dir|tree|find|fd|rg|grep|cat|type|head|tail|less|more|wc|stat|file|which|where)(?:\\s+[^;&|><`$()\\r\\n]*)?\\s*$',
+  '^\\s*git\\s+(status|diff|log|show|branch|remote|rev-parse|ls-files)(?:\\s+[^;&|><`$()\\r\\n]*)?\\s*$',
+  '^\\s*(npm|pnpm|yarn)\\s+(list|ls|view|outdated|why)(?:\\s+[^;&|><`$()\\r\\n]*)?\\s*$',
+  '^\\s*(Get-ChildItem|Get-Content|Get-Item|Get-Location|Select-String|Test-Path|Resolve-Path|Get-Command)(?:\\s+[^;&|><`$()\\r\\n]*)?\\s*$',
+]
+
+export const DEFAULT_DELETE_PATTERNS: readonly string[] = [
+  '^tool:(delete|remove|unlink|trash|rm)(?:_|\\b)',
+  '(?:^|\\n|[;&|]\\s*)rm\\s+(?:-[^\\s]+\\s+)*[^;&|]+',
+  '(?:^|\\n|[;&|]\\s*)(del|erase|rmdir|rd)\\s+(?:/[^\\s]+\\s+)*[^;&|]+',
+  '(?:^|\\n|[;&|]\\s*)Remove-Item\\b',
+  '(?:^|\\n|[;&|]\\s*)git\\s+(clean|rm)\\b',
+  '\\b(DELETE\\s+FROM|DROP\\s+(TABLE|DATABASE|SCHEMA)|TRUNCATE\\s+TABLE)\\b',
+  '(?:^|\\n|[;&|]\\s*)docker\\s+(rm|rmi|volume\\s+rm|network\\s+rm|system\\s+prune)\\b',
+  '(?:^|\\n|[;&|]\\s*)kubectl\\s+delete\\b',
+  '\\*\\*\\*\\s+Delete File\\b',
+  '"(?:op|operation|action)"\\s*:\\s*"(?:delete|remove|unlink)"',
+  '\\b(unlink|removeSync|rmSync|rmdirSync|os\\.(remove|unlink|rmdir)|shutil\\.rmtree)\\s*\\(',
+]
+
 /**
  * Directories a code snapshot should never carry. `.git` is the load-bearing
  * one: the shadow repository has its own GIT_DIR, so the project's `.git` is
@@ -148,6 +181,8 @@ export const Config: z<Config> = z.object({
 
   reasoningEffort: z.object({
     enabled: z.boolean().default(true).description('Edit per-model reasoning efforts for third-party (pi-ai) providers from the Models page.'),
+    defaultFullEfforts: z.boolean().default(true).description('Apply the complete effort ladder to every pi-ai model without an explicit declaration.'),
+    defaultVision: z.boolean().default(true).description('Declare image input for every pi-ai model without an explicit modality declaration.'),
   }),
 
   modelPicker: z.object({
@@ -159,7 +194,7 @@ export const Config: z<Config> = z.object({
     cacheTtlSeconds: z.number().step(1).min(5).max(3600).default(60).description('How long a fetched balance is reused before refetching.'),
     headerBadge: z.boolean().default(true).description('Also show a compact balance chip in the composer, immediately left of the model selector.'),
     pollSeconds: z.number().step(1).min(0).max(600).default(30).description('Refresh the balance chip every N seconds. 0 disables polling.'),
-    peakWindowsUtc: z.array(z.string()).default(['01:00-04:00', '06:00-10:00']).description('DeepSeek peak windows in UTC (HH:MM-HH:MM); official defaults. Outside them rates are half.'),
+    peakWindowsBeijing: z.array(z.string()).default(['09:00-12:00', '14:00-18:00']).description('DeepSeek peak windows in Beijing time (HH:MM-HH:MM); official defaults converted from UTC. Outside them rates are half.'),
     peakWeekdaysOnly: z.boolean().default(true).description('Weekend usage is always off-peak, per the official scheme.'),
   }),
 
@@ -171,6 +206,10 @@ export const Config: z<Config> = z.object({
       z.const('all').description('Send every covered tool call to the reviewer model.'),
     ]).default('rules+llm'),
     tools: z.array(z.string()).default(['bash', 'pwsh', 'run_command']).description('Tool names subject to review.'),
+    writeOnly: z.boolean().default(true).description('Skip read-only calls; use host tool metadata first and readPatterns as a shell fallback.'),
+    readPatterns: z.array(z.string()).default([...DEFAULT_READ_PATTERNS]).description('Regular expressions that recognize read-only shell commands when tool metadata is unavailable.'),
+    absoluteDenyDelete: z.boolean().default(true).description('Deny recognized deletion operations immediately, without model or human review.'),
+    deletePatterns: z.array(z.string()).default([...DEFAULT_DELETE_PATTERNS]).description('Regular expressions matched against tool name plus command/arguments to recognize deletion operations.'),
     provider: z.string().default('deepseek-official').description('Provider route the reviewer model runs on.'),
     model: z.string().default('deepseek-v4-flash').description('Reviewer model id.'),
     timeoutMs: z.number().step(1).min(1000).max(120000).default(20000).description('Reviewer deadline.'),

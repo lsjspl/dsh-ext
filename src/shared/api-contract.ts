@@ -293,8 +293,10 @@ export interface EffortRung extends EffortOption {
 
 export const DEFAULT_EFFORT_LADDER: readonly EffortRung[] = [
   { id: 'off', name: 'Off', description: 'No reasoning budget; send nothing.', wire: null },
+  { id: 'minimal', name: 'Minimal', description: 'The smallest non-zero reasoning effort.', wire: 'minimal' },
   { id: 'low', name: 'Low', description: 'A short think before answering.', wire: 'low' },
   { id: 'medium', name: 'Medium', description: 'Balanced reasoning for everyday work.', wire: 'medium' },
   { id: 'high', name: 'High', description: 'Long reasoning for hard problems.', wire: 'high' },
-  { id: 'max', name: 'Max', description: 'The most reasoning the model will do.', wire: 'high' },
+  { id: 'xhigh', name: 'Extra high', description: 'Extended reasoning beyond high.', wire: 'xhigh' },
+  { id: 'max', name: 'Max', description: 'The most reasoning the model will do.', wire: 'max' },
 ]

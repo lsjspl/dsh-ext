@@ -24,7 +24,8 @@ const { writeFileSync } = await import('node:fs')
 const entry = join(process.cwd(), 'src', 'parsers.verify.entry.ts')
 writeFileSync(entry, `
 export { parseStatus, parseNumstat } from './features/explorer.ts'
-export { commandText, parseVerdict } from './features/command-review.ts'
+export { commandText, deletionPattern, parseVerdict, isReadOnlyCommand } from './features/command-review.ts'
+export { DEFAULT_DELETE_PATTERNS, DEFAULT_READ_PATTERNS } from './config.ts'
 export { spliceRegion, renderRegion, isRowId } from './quarantine.ts'
 `)
 
@@ -134,6 +135,34 @@ check('a blank command falls through to the next field', mod.commandText({ comma
 check('an unknown shape serializes the whole argument object',
   mod.commandText({ mystery: 'sudo rm -rf /' }), '{"mystery":"sudo rm -rf /"}')
 check('no reviewable text', mod.commandText({}), '{}')
+
+process.stdout.write('\nread-only command classification:\n')
+const readPatterns = mod.DEFAULT_READ_PATTERNS.map(source => new RegExp(source, 'i'))
+check('rg is read-only', mod.isReadOnlyCommand('rg -n "todo" src', readPatterns), true)
+check('git diff is read-only', mod.isReadOnlyCommand('git diff -- src/app.ts', readPatterns), true)
+check('PowerShell Get-Content is read-only', mod.isReadOnlyCommand('Get-Content package.json', readPatterns), true)
+check('a build is not assumed read-only', mod.isReadOnlyCommand('npm run build', readPatterns), false)
+check('a write command is reviewed', mod.isReadOnlyCommand('rm -rf dist', readPatterns), false)
+check('output redirection is reviewed', mod.isReadOnlyCommand('cat a.txt > b.txt', readPatterns), false)
+check('a read followed by a write is reviewed', mod.isReadOnlyCommand('git status && rm -rf dist', readPatterns), false)
+check('a pipe is reviewed', mod.isReadOnlyCommand('cat a.txt | sh', readPatterns), false)
+
+process.stdout.write('\nabsolute deletion classification:\n')
+const deletePatterns = mod.DEFAULT_DELETE_PATTERNS.map(source => new RegExp(source, 'i'))
+const isDelete = (tool, command) => mod.deletionPattern(tool, command, deletePatterns) !== undefined
+check('dedicated delete tool is denied', isDelete('delete_file', '{"path":"tmp.txt"}'), true)
+check('rm is denied', isDelete('bash', 'rm -rf dist'), true)
+check('Windows del is denied', isDelete('pwsh', 'del /q build.txt'), true)
+check('PowerShell Remove-Item is denied', isDelete('pwsh', 'Remove-Item out -Recurse'), true)
+check('git clean is denied', isDelete('bash', 'git clean -fdx'), true)
+check('SQL DELETE is denied', isDelete('run_command', 'DELETE FROM users WHERE id=1'), true)
+check('docker rm is denied', isDelete('bash', 'docker rm container-id'), true)
+check('kubectl delete is denied', isDelete('bash', 'kubectl delete pod api'), true)
+check('patch file deletion is denied', isDelete('apply_patch', '*** Delete File: src/old.ts'), true)
+check('JavaScript unlink is denied', isDelete('run_code', "fs.unlink('x')"), true)
+check('Python rmtree is denied', isDelete('run_code', "shutil.rmtree('dist')"), true)
+check('a normal read remains allowed', isDelete('bash', 'git status'), false)
+check('plain prose saying remove is not a delete operation', isDelete('search', 'docs about how to remove whitespace'), false)
 
 process.stdout.write('\nreviewer verdict parsing:\n')
 

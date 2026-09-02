@@ -1,5 +1,5 @@
 import { Component, useState } from 'react'
-import { Notice, NumberField, Row, Section, Select, TextField, Toggle, buttonStyle, token } from './ui.tsx'
+import { Notice, NumberField, Row, Section, Select, TextAreaField, TextField, Toggle, buttonStyle, token } from './ui.tsx'
 import { useResource } from './use-resource.ts'
 import { useConfig } from './use-config.ts'
 import { BalanceCard } from './BalanceView.tsx'
@@ -10,7 +10,7 @@ import { EffortsPanel } from './EffortsPanel.tsx'
 import { CheckpointsPanel } from './CheckpointsPanel.tsx'
 import { ExplorerPanel } from './ExplorerPanel.tsx'
 import { useT } from './use-locale.ts'
-import type { CommandReviewFallback, CommandReviewMode } from '../config.ts'
+import { DEFAULT_DELETE_PATTERNS, DEFAULT_READ_PATTERNS, type CommandReviewFallback, type CommandReviewMode } from '../config.ts'
 import type { ReviewModels } from '../shared/api-contract.ts'
 
 /**
@@ -97,8 +97,11 @@ function TabStrip(props: { active: Tab; onSelect: (tab: Tab) => void }) {
               borderBottom: `2px solid ${active ? token.accent : 'transparent'}`,
               borderRadius: 0,
               background: 'transparent',
-              padding: '6px 10px',
-              fontSize: 12,
+              padding: '8px 12px',
+              fontSize: 14,
+              lineHeight: 1.4,
+              fontWeight: active ? 500 : 400,
+              whiteSpace: 'nowrap',
               color: active ? token.text : token.textMuted,
             }}
           >
@@ -153,12 +156,12 @@ export function SettingsPage() {
         <SettingsBoundary>
         {tab === 'input' && (
           <>
-            <Section title={t('section.images')} description={t('section.images.desc')}>
-              <Row
-                label={t('common.enabled')}
-                control={<Toggle label={t('section.images')} checked={c.imageComposer.enabled} disabled={disabled}
-                  onChange={next => { set(['imageComposer', 'enabled'], next) }} />}
-              />
+            <Section
+              title={t('section.images')}
+              description={t('section.images.desc')}
+              action={<Toggle label={t('section.images')} checked={c.imageComposer.enabled} disabled={disabled}
+                onChange={next => { set(['imageComposer', 'enabled'], next) }} />}
+            >
               <Row
                 label={t('images.button')} hint={t('images.button.hint')}
                 control={<Toggle label={t('images.button')} checked={c.imageComposer.pickerButton} disabled={disabled || !c.imageComposer.enabled}
@@ -172,11 +175,21 @@ export function SettingsPage() {
               />
             </Section>
 
-            <Section title={t('section.effort')} description={t('section.effort.desc')}>
+            <Section
+              title={t('section.effort')}
+              description={t('section.effort.desc')}
+              action={<Toggle label={t('section.effort')} checked={c.reasoningEffort.enabled} disabled={disabled}
+                onChange={next => { set(['reasoningEffort', 'enabled'], next) }} />}
+            >
               <Row
-                label={t('common.enabled')}
-                control={<Toggle label={t('section.effort')} checked={c.reasoningEffort.enabled} disabled={disabled}
-                  onChange={next => { set(['reasoningEffort', 'enabled'], next) }} />}
+                label={t('effort.defaultFull')} hint={t('effort.defaultFull.hint')}
+                control={<Toggle label={t('effort.defaultFull')} checked={c.reasoningEffort.defaultFullEfforts ?? true} disabled={disabled || !c.reasoningEffort.enabled}
+                  onChange={next => { set(['reasoningEffort', 'defaultFullEfforts'], next) }} />}
+              />
+              <Row
+                label={t('vision.defaultAll')} hint={t('vision.defaultAll.hint')}
+                control={<Toggle label={t('vision.defaultAll')} checked={c.reasoningEffort.defaultVision ?? true} disabled={disabled || !c.reasoningEffort.enabled}
+                  onChange={next => { set(['reasoningEffort', 'defaultVision'], next) }} />}
               />
               <Disclosure label={t('effort.models')}>
                 <EffortsPanel enabled={c.reasoningEffort.enabled} />
@@ -195,12 +208,12 @@ export function SettingsPage() {
         )}
 
         {tab === 'balance' && (
-          <Section title={t('section.balance')} description={t('section.balance.desc')}>
-            <Row
-              label={t('common.enabled')}
-              control={<Toggle label={t('section.balance')} checked={c.deepseekBalance.enabled} disabled={disabled}
-                onChange={next => { set(['deepseekBalance', 'enabled'], next) }} />}
-            />
+          <Section
+            title={t('section.balance')}
+            description={t('section.balance.desc')}
+            action={<Toggle label={t('section.balance')} checked={c.deepseekBalance.enabled} disabled={disabled}
+              onChange={next => { set(['deepseekBalance', 'enabled'], next) }} />}
+          >
             <Row
               label={t('balance.badge')} hint={t('balance.badge.hint')}
               control={<Toggle label={t('balance.badge')} checked={c.deepseekBalance.headerBadge} disabled={disabled || !c.deepseekBalance.enabled}
@@ -222,12 +235,12 @@ export function SettingsPage() {
               label={t('balance.peakWindows')} hint={t('balance.peakWindows.hint')}
               control={<TextField
                 label={t('balance.peakWindows')}
-                value={(c.deepseekBalance.peakWindowsUtc ?? []).join(', ')}
+                value={(c.deepseekBalance.peakWindowsBeijing ?? ['09:00-12:00', '14:00-18:00']).join(', ')}
                 disabled={disabled || !c.deepseekBalance.enabled}
                 width={220}
                 onCommit={next => {
                   const windows = next.split(',').map(window => window.trim()).filter(window => window.length > 0)
-                  set(['deepseekBalance', 'peakWindowsUtc'], windows)
+                  set(['deepseekBalance', 'peakWindowsBeijing'], windows)
                 }} />}
             />
             <Row
@@ -242,12 +255,12 @@ export function SettingsPage() {
         )}
 
         {tab === 'review' && (
-          <Section title={t('section.review')} description={t('section.review.desc')}>
-            <Row
-              label={t('common.enabled')}
-              control={<Toggle label={t('section.review')} checked={c.commandReview.enabled} disabled={disabled}
-                onChange={next => { set(['commandReview', 'enabled'], next) }} />}
-            />
+          <Section
+            title={t('section.review')}
+            description={t('section.review.desc')}
+            action={<Toggle label={t('section.review')} checked={c.commandReview.enabled} disabled={disabled}
+              onChange={next => { set(['commandReview', 'enabled'], next) }} />}
+          >
             <Row
               label={t('review.mode')}
               control={<Select<CommandReviewMode>
@@ -258,6 +271,16 @@ export function SettingsPage() {
                   { value: 'rules+llm', label: t('review.mode.rulesLlm') },
                   { value: 'all', label: t('review.mode.all') },
                 ]} />}
+            />
+            <Row
+              label={t('review.writeOnly')} hint={t('review.writeOnly.hint')}
+              control={<Toggle label={t('review.writeOnly')} checked={c.commandReview.writeOnly ?? true} disabled={disabled || !c.commandReview.enabled}
+                onChange={next => { set(['commandReview', 'writeOnly'], next) }} />}
+            />
+            <Row
+              label={t('review.absoluteDelete')} hint={t('review.absoluteDelete.hint')}
+              control={<Toggle label={t('review.absoluteDelete')} checked={c.commandReview.absoluteDenyDelete ?? true} disabled={disabled || !c.commandReview.enabled}
+                onChange={next => { set(['commandReview', 'absoluteDenyDelete'], next) }} />}
             />
             <Row
               label={t('review.modelPick')} hint={t('review.modelPick.hint')}
@@ -314,6 +337,39 @@ export function SettingsPage() {
               hint={t('review.tools.hint')}
               control={<span style={{ fontSize: 11, color: token.textMuted }}>{c.commandReview.tools.join(', ')}</span>}
             />
+            <Row
+              label={t('review.denyPatterns')} hint={t('review.denyPatterns.hint')}
+              control={<TextAreaField
+                label={t('review.denyPatterns')}
+                value={c.commandReview.denyPatterns.join('\n')}
+                disabled={disabled || !c.commandReview.enabled}
+                rows={7}
+                onCommit={next => {
+                  set(['commandReview', 'denyPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                }} />}
+            />
+            <Row
+              label={t('review.readPatterns')} hint={t('review.readPatterns.hint')}
+              control={<TextAreaField
+                label={t('review.readPatterns')}
+                value={(c.commandReview.readPatterns ?? DEFAULT_READ_PATTERNS).join('\n')}
+                disabled={disabled || !c.commandReview.enabled || !(c.commandReview.writeOnly ?? true)}
+                rows={5}
+                onCommit={next => {
+                  set(['commandReview', 'readPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                }} />}
+            />
+            <Row
+              label={t('review.deletePatterns')} hint={t('review.deletePatterns.hint')}
+              control={<TextAreaField
+                label={t('review.deletePatterns')}
+                value={(c.commandReview.deletePatterns ?? DEFAULT_DELETE_PATTERNS).join('\n')}
+                disabled={disabled || !c.commandReview.enabled || !(c.commandReview.absoluteDenyDelete ?? true)}
+                rows={7}
+                onCommit={next => {
+                  set(['commandReview', 'deletePatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                }} />}
+            />
             <Disclosure label={t('review.verdicts')}>
               <AuditPanel enabled={c.commandReview.enabled} />
             </Disclosure>
@@ -321,12 +377,12 @@ export function SettingsPage() {
         )}
 
         {tab === 'files' && (
-          <Section title={t('section.explorer')} description={t('section.explorer.desc')}>
-            <Row
-              label={t('common.enabled')}
-              control={<Toggle label={t('section.explorer')} checked={c.explorer.enabled} disabled={disabled}
-                onChange={next => { set(['explorer', 'enabled'], next) }} />}
-            />
+          <Section
+            title={t('section.explorer')}
+            description={t('section.explorer.desc')}
+            action={<Toggle label={t('section.explorer')} checked={c.explorer.enabled} disabled={disabled}
+              onChange={next => { set(['explorer', 'enabled'], next) }} />}
+          >
             <Row
               label={t('explorer.side')}
               control={<Select<'left' | 'right'>
@@ -356,12 +412,12 @@ export function SettingsPage() {
 
         {tab === 'sessions' && (
           <>
-            <Section title={t('section.sessions')} description={t('section.sessions.desc')}>
-              <Row
-                label={t('common.enabled')}
-                control={<Toggle label={t('section.sessions')} checked={c.sessionAdmin.enabled} disabled={disabled}
-                  onChange={next => { set(['sessionAdmin', 'enabled'], next) }} />}
-              />
+            <Section
+              title={t('section.sessions')}
+              description={t('section.sessions.desc')}
+              action={<Toggle label={t('section.sessions')} checked={c.sessionAdmin.enabled} disabled={disabled}
+                onChange={next => { set(['sessionAdmin', 'enabled'], next) }} />}
+            >
               <Row
                 label={t('sessions.trash')} hint={t('sessions.trash.hint')}
                 control={<Toggle label={t('sessions.trash')} checked={c.sessionAdmin.trashEnabled} disabled={disabled || !c.sessionAdmin.enabled}
@@ -378,12 +434,12 @@ export function SettingsPage() {
               </Disclosure>
             </Section>
 
-            <Section title={t('section.checkpoints')} description={t('section.checkpoints.desc')}>
-              <Row
-                label={t('common.enabled')}
-                control={<Toggle label={t('section.checkpoints')} checked={c.checkpoints.enabled} disabled={disabled}
-                  onChange={next => { set(['checkpoints', 'enabled'], next) }} />}
-              />
+            <Section
+              title={t('section.checkpoints')}
+              description={t('section.checkpoints.desc')}
+              action={<Toggle label={t('section.checkpoints')} checked={c.checkpoints.enabled} disabled={disabled}
+                onChange={next => { set(['checkpoints', 'enabled'], next) }} />}
+            >
               <Row
                 label={t('cp.snapshotOn')}
                 control={<Select<'turn' | 'tool'>
@@ -411,12 +467,12 @@ export function SettingsPage() {
         )}
 
         {tab === 'plugins' && (
-          <Section title={t('section.plugins')} description={t('section.plugins.desc')}>
-            <Row
-              label={t('common.enabled')}
-              control={<Toggle label={t('section.plugins')} checked={c.pluginSafety.enabled} disabled={disabled}
-                onChange={next => { set(['pluginSafety', 'enabled'], next) }} />}
-            />
+          <Section
+            title={t('section.plugins')}
+            description={t('section.plugins.desc')}
+            action={<Toggle label={t('section.plugins')} checked={c.pluginSafety.enabled} disabled={disabled}
+              onChange={next => { set(['pluginSafety', 'enabled'], next) }} />}
+          >
             <Disclosure label={t('plugins.list')} defaultOpen={c.pluginSafety.quarantine.length > 0}>
               <PluginsPanel enabled={c.pluginSafety.enabled} />
             </Disclosure>
