@@ -153,8 +153,12 @@ export function SidePanel(props: SidePanelProps) {
         display: 'flex',
         flexDirection: 'column',
         minHeight: 0,
-        padding: 10,
+        padding: 12,
         gap: 8,
+        // The host's compact-surface size: its read cards and search blocks set
+        // 13px, and a panel that guesses smaller reads as fine print against
+        // them. Family stays inherited, so the face is always the shell's own.
+        fontSize: 13,
         color: token.text,
         background: token.surfaceBase,
         borderLeft: props.side === 'right' ? `1px solid ${token.border}` : 'none',

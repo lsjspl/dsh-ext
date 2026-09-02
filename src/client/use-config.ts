@@ -10,12 +10,19 @@ export interface ConfigView {
   readonly writable: boolean
 }
 
+export interface ConfigOp {
+  readonly path: readonly string[]
+  readonly value: unknown
+}
+
 export interface ConfigStore {
   readonly view: ConfigView | undefined
   readonly error: string | undefined
   readonly busy: boolean
   reload(): void
   set(path: readonly string[], value: unknown): void
+  /** One fenced write carrying several path ops — a two-field change lands atomically. */
+  setMany(ops: readonly ConfigOp[]): void
 }
 
 /**
@@ -47,14 +54,13 @@ export function useConfig(): ConfigStore {
 
   const reload = useCallback(() => { setNonce(n => n + 1) }, [])
 
-  const set = useCallback((path: readonly string[], value: unknown) => {
+  const setMany = useCallback((ops: readonly ConfigOp[]) => {
     setBusy(true)
     void (async () => {
-      const current = view
       const result = await callApi<ConfigView>('/config/mutate', {
         body: {
-          ops: [{ op: 'set', path, value }],
-          expectedRevision: current?.revision,
+          ops: ops.map(op => ({ op: 'set', path: op.path, value: op.value })),
+          expectedRevision: view?.revision,
         },
       })
       setBusy(false)
@@ -71,5 +77,10 @@ export function useConfig(): ConfigStore {
     })()
   }, [view, reload])
 
-  return { view, error, busy, reload, set }
+  // `set` is a one-op `setMany`; declared after it because it closes over it.
+  const set = useCallback((path: readonly string[], value: unknown) => {
+    setMany([{ path, value }])
+  }, [setMany])
+
+  return { view, error, busy, reload, set, setMany }
 }

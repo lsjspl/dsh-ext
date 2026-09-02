@@ -140,6 +140,26 @@ export const buttonStyle: CSSProperties = {
   userSelect: 'none',
 }
 
+/** One indent step for in-place tree expansion (file tree, review folders). */
+export const INDENT = 14
+
+/**
+ * One list row inside the side panel — the anatomy the file tree and the
+ * review list share, so the two read as one panel rather than two designs.
+ */
+export const rowStyle: CSSProperties = {
+  ...buttonStyle,
+  display: 'flex',
+  width: '100%',
+  gap: 6,
+  alignItems: 'center',
+  border: 'none',
+  background: 'transparent',
+  textAlign: 'left',
+  padding: '4px 6px',
+  fontSize: 13,
+}
+
 /**
  * A text field that commits on blur or Enter, not on every keystroke.
  *

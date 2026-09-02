@@ -60,6 +60,17 @@ function toPosix(root: string, absolute: string): string {
 }
 
 /**
+ * Normalize CRLF to LF before any text leaves the backend.
+ *
+ * A Windows checkout holds CRLF on disk while git stores LF, so a line diff
+ * between the two sides would report every line changed. The newline itself is
+ * never what the user edited.
+ */
+function toLf(text: string): string {
+  return text.replace(/\r\n?/g, '\n')
+}
+
+/**
  * Largest file the viewer will fetch. A source file is kilobytes; anything past
  * this is a bundle, a log, or a database, and shipping it to the browser would
  * stall the tab rather than show anything a person reads.
@@ -93,7 +104,7 @@ async function readTextFile(root: string, requested: string): Promise<{
   const head = buffer.subarray(0, Math.min(buffer.length, 8000))
   if (head.includes(0)) throw new ApiError(415, 'that file is binary, so there is nothing to show')
 
-  const text = buffer.toString('utf8')
+  const text = toLf(buffer.toString('utf8'))
   const lines = text.split('\n')
   const truncated = lines.length > MAX_VIEW_LINES
   return {
@@ -118,7 +129,9 @@ const MAX_VIEW_LINES = 5000
  * On Windows the CLI is `code.cmd` — a batch file, which `execFile` cannot spawn
  * without a shell. Rather than turn on `shell: true` (which would make every path
  * below a string the shell re-parses), the launcher is resolved to a concrete
- * file and spawned through `cmd.exe /c` with the path as a separate argument.
+ * file and spawned through `cmd.exe /d /s /c` with the command line quoted and
+ * passed verbatim — see the comment on `openInEditor` for why the quotes are
+ * doubled and sent unescaped.
  */
 function editorCandidates(): string[] {
   const fromEnv = process.env.DSH_EXT_EDITOR
@@ -146,12 +159,44 @@ function editorCandidates(): string[] {
 }
 
 /**
+ * How long a spawn is watched for an early death before "it launched" is
+ * assumed. A launcher that cannot run — a mangled command line, a missing
+ * binary — dies within milliseconds; one that DOES run stays alive, because
+ * the VS Code wrapper waits on its GUI. So a quiet watch is the success
+ * signal, and an early exit is the failure signal.
+ */
+const LAUNCH_WATCH_MS = 2500
+
+/**
+ * Turn a launcher's stderr into the error the panel shows.
+ *
+ * Console output on Windows is written in the OEM codepage — GBK on a Chinese
+ * machine — not UTF-8, so the raw bytes must be decoded as GBK before they are
+ * text. Only the tail is kept: cmd's reason ("not recognized…") is what
+ * matters, and a chatty launcher could otherwise flood the toast.
+ */
+function launchFailure(stderr: readonly Buffer[], code: number | null): ApiError {
+  const raw = Buffer.concat([...stderr])
+  let text: string
+  try {
+    text = new TextDecoder('gbk').decode(raw)
+  } catch {
+    text = raw.toString('utf8')
+  }
+  const reason = text.replace(/\s+/g, ' ').trim().slice(-160)
+  return new ApiError(500, reason.length > 0
+    ? `the editor could not be started (exit ${code}): ${reason}`
+    : `the editor could not be started (exit ${code})`)
+}
+
+/**
  * Open a path in VS Code.
  *
- * Launch-and-forget: the child is unref'd and detached so the editor outlives
- * this request, and stdio is ignored so a chatty launcher cannot fill a pipe
- * nobody drains and wedge itself. What comes back is only whether the spawn was
- * accepted — the editor's own startup is not something this endpoint can wait on.
+ * What comes back is only whether the launch was accepted — the editor's own
+ * startup is not something this endpoint can wait on — but unlike a pure
+ * fire-and-forget spawn, a launch that dies immediately (exit != 0, spawn
+ * error) is reported, because a button that silently does nothing is
+ * indistinguishable from a button that was never pressed.
  *
  * @param root - workspace root, opened as the editor's folder.
  * @param target - absolute path already proven inside `root`.
@@ -174,17 +219,49 @@ async function openInEditor(root: string, target: string, isFile: boolean): Prom
   // project's own window instead of a bare single-file window with no context.
   const args = isFile ? [root, '--reuse-window', '--goto', target] : [root]
   const isBatch = launcher.toLowerCase().endsWith('.cmd') || launcher.toLowerCase().endsWith('.bat')
-  const command = isBatch ? (process.env.COMSPEC ?? 'cmd.exe') : launcher
-  const commandArgs = isBatch ? ['/d', '/s', '/c', launcher, ...args] : args
 
-  try {
-    const child = spawn(command, commandArgs, { detached: true, stdio: 'ignore', windowsHide: true })
-    child.unref()
-    child.on('error', () => { /* the editor failing to start is not this request's business */ })
-  } catch {
-    throw new ApiError(500, 'the editor could not be started')
-  }
-  return { opened: true, editor: launcher }
+  // Batch launchers go through cmd.exe with the whole command line pre-quoted,
+  // in TWO wrapping pairs. Node escapes embedded quotes with backslashes, which
+  // cmd does not read, so the line is sent verbatim (`windowsVerbatimArguments`)
+  // and the quoting is written here by hand. The doubled pair is not
+  // decoration: cmd's `/S` rule strips the first and last quote of the `/c`
+  // string, so without the outer pair the inner quotes are what get stripped —
+  // and a launcher path like `...\Microsoft VS Code\bin\code.cmd` is then cut
+  // at its first space ("not recognized as an internal or external command"),
+  // which is exactly how the first version of this endpoint failed to open
+  // anything while reporting success.
+  const child = isBatch
+    ? spawn(
+        process.env.COMSPEC ?? 'cmd.exe',
+        ['/d', '/s', '/c', `"${[`"${launcher}"`, ...args.map(a => `"${a}"`)].join(' ')}"`],
+        { detached: true, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, windowsVerbatimArguments: true },
+      )
+    : spawn(launcher, args, { detached: true, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true })
+
+  return await new Promise((resolve, reject) => {
+    const stderr: Buffer[] = []
+    let settled = false
+    const settle = (finish: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(watch)
+      finish()
+    }
+    const watch = setTimeout(() => {
+      // Still alive: the editor took the handoff. Let it outlive the request.
+      settle(() => { child.unref(); resolve({ opened: true, editor: launcher ?? '' }) })
+    }, LAUNCH_WATCH_MS)
+    child.on('error', (error: Error) => {
+      settle(() => { reject(new ApiError(500, `the editor could not be started: ${error.message}`)) })
+    })
+    child.stderr?.on('data', (chunk: Buffer) => { stderr.push(chunk) })
+    child.on('close', code => {
+      settle(() => {
+        if (code === 0) resolve({ opened: true, editor: launcher ?? '' })
+        else reject(launchFailure(stderr, code))
+      })
+    })
+  })
 }
 
 /**
@@ -400,17 +477,130 @@ export function parseStatus(stdout: string): ChangeEntry[] {
   return changes
 }
 
+/** Lines added and removed for one path, versus HEAD. */
+export interface LineCounts {
+  readonly added: number
+  readonly removed: number
+}
+
+/**
+ * Parse `git diff --numstat -z` output into per-path line counts.
+ *
+ * `-z` records are `added\tremoved\tpath` NUL-terminated, with a rename
+ * carrying its original path as a FOURTH tab-separated field — so the key is
+ * field three (the new path, which is what porcelain names too), never the
+ * last field. Binary files report `-` in both columns and yield no entry:
+ * there are no line counts to show for them. Duplicate paths accumulate,
+ * which is what lets a staged delta and a further unstaged delta for the same
+ * file sum into one "versus HEAD" figure.
+ */
+export function parseNumstat(stdout: string): Map<string, LineCounts> {
+  const counts = new Map<string, LineCounts>()
+  for (const record of splitNul(stdout)) {
+    const fields = record.split('\t')
+    const added = fields[0] ?? ''
+    const removed = fields[1] ?? ''
+    const path = fields[2] ?? ''
+    if (path.length === 0 || added === '-' || removed === '-') continue
+    const previous = counts.get(path) ?? { added: 0, removed: 0 }
+    counts.set(path, {
+      added: previous.added + (Number.parseInt(added, 10) || 0),
+      removed: previous.removed + (Number.parseInt(removed, 10) || 0),
+    })
+  }
+  return counts
+}
+
+/** Merge `from` into `into`, summing counts for paths both sides know. */
+function mergeCounts(into: Map<string, LineCounts>, from: Map<string, LineCounts>): void {
+  for (const [path, counts] of from) {
+    const previous = into.get(path) ?? { added: 0, removed: 0 }
+    into.set(path, {
+      added: previous.added + counts.added,
+      removed: previous.removed + counts.removed,
+    })
+  }
+}
+
+/** Newlines in a text, ignoring a trailing one — what `wc -l` reports. */
+function lineCount(text: string): number {
+  if (text.length === 0) return 0
+  return text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
+}
+
+/**
+ * Untracked files get their line counts from disk (git has no numstat for a
+ * path it does not track), but the work is bounded: a poll that counted every
+ * line of every untracked artifact would turn a five-second refresh into a
+ * file walk. Files past either cap simply show no counts.
+ */
+const UNTRACKED_COUNT_FILES = 24
+const UNTRACKED_COUNT_BYTES = 256 * 1024
+
 /** Branch, upstream distance, and the working tree's changes. */
+/** Attach one side's figures to a change; the contract's fields are readonly, so this rebuilds. */
+function withStagedCounts(change: ChangeEntry, counts: LineCounts | undefined): ChangeEntry {
+  return counts === undefined ? change : { ...change, stagedAdded: counts.added, stagedRemoved: counts.removed }
+}
+
+function withWorktreeCounts(change: ChangeEntry, counts: LineCounts | undefined): ChangeEntry {
+  return counts === undefined ? change : { ...change, worktreeAdded: counts.added, worktreeRemoved: counts.removed }
+}
+
+function withTotalCounts(change: ChangeEntry, counts: LineCounts | undefined): ChangeEntry {
+  return counts === undefined ? change : { ...change, added: counts.added, removed: counts.removed }
+}
+
 async function readStatus(root: string, signal: AbortSignal): Promise<ExplorerStatus> {
   if (!await hasGit(root)) return { isRepository: false, changes: [] }
   const repo = await repositoryRoot(root, signal)
   if (repo === undefined) return { isRepository: false, changes: [] }
 
-  const [statusResult, branchResult, trackingResult] = await Promise.all([
+  const [statusResult, branchResult, trackingResult, worktreeResult, stagedResult] = await Promise.all([
     git(['status', '--porcelain=v1', '-z', '--untracked-files=normal'], { cwd: root, signal }),
     git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, signal }),
     git(['rev-list', '--left-right', '--count', '@{upstream}...HEAD'], { cwd: root, signal }),
+    git(['diff', '--numstat', '-z'], { cwd: root, signal }),
+    git(['diff', '--cached', '--numstat', '-z'], { cwd: root, signal }),
   ])
+
+  const worktreeCounts = worktreeResult.ok ? parseNumstat(worktreeResult.stdout) : new Map<string, LineCounts>()
+  const stagedCounts = stagedResult.ok ? parseNumstat(stagedResult.stdout) : new Map<string, LineCounts>()
+  const counts = new Map<string, LineCounts>()
+  mergeCounts(counts, worktreeCounts)
+  mergeCounts(counts, stagedCounts)
+
+  const untrackedCounts = new Map<string, LineCounts>()
+  let countedUntracked = 0
+  const parsed = statusResult.ok ? parseStatus(statusResult.stdout) : []
+  for (const change of parsed) {
+    if (change.untracked && countedUntracked < UNTRACKED_COUNT_FILES) {
+      // A new file is one whole addition; count its lines from disk, within
+      // the caps above. A file that vanishes or reads as binary just shows no
+      // counts until the next poll.
+      try {
+        const absolute = join(root, change.path)
+        const info = await stat(absolute)
+        if (info.isFile() && info.size <= UNTRACKED_COUNT_BYTES) {
+          const buffer = await readFile(absolute)
+          if (!buffer.includes(0)) {
+            countedUntracked += 1
+            untrackedCounts.set(change.path, { added: lineCount(buffer.toString('utf8')), removed: 0 })
+          }
+        }
+      } catch { /* the file disappeared mid-poll; the next one will retry */ }
+    }
+  }
+  mergeCounts(counts, untrackedCounts)
+
+  const changes = parsed.map(change => {
+    // Per-side figures: staged versus HEAD, unstaged versus the index — what
+    // the staged/unstaged filters show. `added`/`removed` stay the sum of
+    // both sides, the versus-HEAD figure the flat list shows.
+    const stagedSide = change.staged ? stagedCounts.get(change.path) : undefined
+    const worktreeSide = change.untracked ? untrackedCounts.get(change.path) : worktreeCounts.get(change.path)
+    return withTotalCounts(withWorktreeCounts(withStagedCounts(change, stagedSide), worktreeSide), counts.get(change.path))
+  })
 
   let ahead: number | undefined
   let behind: number | undefined
@@ -430,7 +620,7 @@ async function readStatus(root: string, signal: AbortSignal): Promise<ExplorerSt
     branch: branch === undefined || branch.length === 0 || branch === 'HEAD' ? undefined : branch,
     ahead,
     behind,
-    changes: statusResult.ok ? parseStatus(statusResult.stdout) : [],
+    changes,
   }
 }
 
@@ -620,6 +810,56 @@ export function mountExplorer(
         throw new ApiError(409, 'git could not produce a diff for that path')
       }
       return { path: requested, staged, patch: result.stdout }
+    },
+
+    '/explorer/review': async ({ query, req }) => {
+      if (!config().explorer.enabled) throw new ApiError(404, 'the explorer is switched off')
+      const controller = new AbortController()
+      req.on('close', () => { controller.abort() })
+      const { root } = await resolveRoot(ctx, query.get('workspace'), query.get('session'), controller.signal)
+      const requested = query.get('path')
+      if (requested === null || requested.length === 0) throw new ApiError(400, 'a path is required')
+      const absolute = await containedPath(root, requested)
+
+      // The prior side comes from git — `HEAD:` is the base for both staged and
+      // unstaged work, which is the combined view an IDE's source-control
+      // inline diff shows. A path with no revision (a new file) reads as
+      // `null`, which the diff then draws as one whole addition.
+      const headResult = await git(['show', `HEAD:${requested}`], { cwd: root, signal: controller.signal })
+      const oldText = headResult.ok ? toLf(headResult.stdout) : null
+
+      // The current side comes from disk. A file deleted in the worktree reads
+      // as empty, drawn as a whole removal — which is the honest review of it.
+      let newText = ''
+      try {
+        const info = await stat(absolute)
+        if (info.isFile()) {
+          if (info.size > MAX_VIEW_BYTES) throw new ApiError(413, 'that file is too large to review')
+          const buffer = await readFile(absolute)
+          if (buffer.includes(0)) throw new ApiError(415, 'that file is binary, so there is nothing to review')
+          newText = toLf(buffer.toString('utf8'))
+        }
+      } catch (error: unknown) {
+        if (error instanceof ApiError) throw error
+        const code = (error as { code?: string }).code
+        if (code !== 'ENOENT') throw new ApiError(404, 'that file could not be read')
+      }
+
+      // Header counts for the diff tab: one numstat against HEAD covers both
+      // staged and unstaged work; a path git does not track (a brand-new file)
+      // counts its lines from the text just read.
+      const countResult = await git(['diff', 'HEAD', '--numstat', '-z', '--', requested], { cwd: root, signal: controller.signal })
+      const counted = countResult.ok ? parseNumstat(countResult.stdout).get(requested) : undefined
+      const countedUntracked = counted === undefined && oldText === null && newText.length > 0
+        ? { added: lineCount(newText), removed: 0 }
+        : undefined
+      const lines = counted ?? countedUntracked
+      return {
+        path: requested,
+        oldText,
+        newText,
+        ...(lines === undefined ? {} : { added: lines.added, removed: lines.removed }),
+      }
     },
 
     '/explorer/file': async ({ query, req }) => {

@@ -73,6 +73,16 @@ export interface ChangeEntry {
   readonly worktree: string
   readonly staged: boolean
   readonly untracked: boolean
+  /** Lines added versus HEAD (both sides summed), when countable (absent for binary files). */
+  readonly added?: number
+  /** Lines removed versus HEAD, same caveat as `added`. */
+  readonly removed?: number
+  /** Lines added on the staged side (index versus HEAD), for the staged filter. */
+  readonly stagedAdded?: number
+  readonly stagedRemoved?: number
+  /** Lines added on the unstaged side (worktree versus index), for the unstaged filter. */
+  readonly worktreeAdded?: number
+  readonly worktreeRemoved?: number
 }
 
 export interface ExplorerStatus {
@@ -82,6 +92,41 @@ export interface ExplorerStatus {
   readonly ahead?: number
   readonly behind?: number
   readonly changes: readonly ChangeEntry[]
+}
+
+/** One file's content, as the `/explorer/file` viewer returns it. */
+export interface FileView {
+  /** Workspace-relative path echoed back. */
+  readonly path: string
+  /** Text content, already cut at the server's line cap when `truncated`. */
+  readonly content: string
+  /** A shiki grammar id, or '' when the language is unknown (plain monospace). */
+  readonly language: string
+  /** True when the file was longer than the line cap and only its head came back. */
+  readonly truncated: boolean
+  readonly bytes: number
+}
+
+/** What `/explorer/open-editor` answers: whether a launcher was spawned. */
+export interface OpenEditorResult {
+  readonly opened: boolean
+  /** The launcher binary that was spawned, for a "what ran?" line. */
+  readonly editor: string
+}
+
+/**
+ * One changed file's both sides, for the review tab's inline diff. `oldText` is
+ * `null` when git has no prior revision of the path (a new file), which the
+ * diff then draws as one whole addition.
+ */
+export interface ReviewDiff {
+  readonly path: string
+  readonly oldText: string | null
+  readonly newText: string
+  /** Lines added versus HEAD, when countable (absent for binary files). */
+  readonly added?: number
+  /** Lines removed versus HEAD, same caveat as `added`. */
+  readonly removed?: number
 }
 
 // ── Session records ────────────────────────────────────────────────────────
@@ -157,6 +202,21 @@ export interface RestorePreview {
    * project's own git — a restore is the only copy that would be lost.
    */
   readonly unprotected: readonly string[]
+}
+
+/**
+ * One model the reviewer can run on, flattened from the live provider routes.
+ * `name` falls back to the id when the route advertises none.
+ */
+export interface ReviewModelRow {
+  readonly provider: string
+  readonly model: string
+  readonly name: string
+}
+
+/** What `/review/models` answers. */
+export interface ReviewModels {
+  readonly models: readonly ReviewModelRow[]
 }
 
 // ── Reasoning effort ───────────────────────────────────────────────────────

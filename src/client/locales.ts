@@ -16,6 +16,25 @@ export const en = {
   // Section titles and descriptions
   'section.images': 'Composer images',
   'section.images.desc': 'An image entry at the top of the + menu, and drag-to-reorder for draft images.',
+
+  // Settings tabs
+  'tab.input': 'Input & models',
+  'tab.balance': 'Balance',
+  'tab.review': 'Review',
+  'tab.files': 'Files',
+  'tab.sessions': 'Sessions',
+  'tab.plugins': 'Plugins',
+
+  // Balance extras
+  'balance.peak': 'Peak',
+  'balance.offPeak': 'Off-peak',
+  'balance.poll': 'Poll interval (seconds)',
+  'balance.poll.hint': 'The balance chip refreshes itself every N seconds. 0 disables polling.',
+  'balance.peakWindows': 'Peak windows (UTC)',
+  'balance.peakWindows.hint': 'Official defaults: weekdays 01:00-04:00 and 06:00-10:00 UTC; rates are half outside these windows. Comma-separated HH:MM-HH:MM.',
+  'balance.peakWeekdays': 'Weekends are off-peak',
+  'balance.peakWeekdays.hint': 'Official scheme: Saturdays and Sundays bill at off-peak rates all day.',
+  'balance.badge.title': 'DeepSeek balance · peak windows {windows} (UTC) · key from {source}',
   'section.effort': 'Reasoning effort',
   'section.effort.desc': 'Declares each model\'s effort levels for third-party (pi-ai) routes, so the composer\'s effort control appears for those models.',
   'section.balance': 'DeepSeek balance',
@@ -162,6 +181,10 @@ export const en = {
   'review.count': '{n} most recent verdict(s).',
   'review.matched': 'matched pattern:',
   'review.off': 'Command review is switched off.',
+  'review.modelPick': 'Reviewer model',
+  'review.modelPick.hint': 'Pick the reviewer from the configured routes; the provider follows the chosen model.',
+  'review.autoChip': 'Auto review',
+  'review.autoChip.hint': 'Every command is adjudicated by the reviewer model first; commands whose risk the model cannot judge escalate to you.',
 
   // Explorer
   'explorer.side': 'Side',
@@ -170,7 +193,7 @@ export const en = {
   'explorer.defaultOpen': 'Open by default',
   'explorer.gitignore': 'Respect .gitignore',
   'explorer.preview': 'Preview',
-  'explorer.changes': 'Changes',
+  'explorer.changes': 'Review',
   'explorer.files': 'Files',
   'explorer.noRepo': 'Not a git repository.',
   'explorer.noChanges': 'No uncommitted changes.',
@@ -188,6 +211,15 @@ export const en = {
   'explorer.truncatedFile': '…only the first {lines} lines are shown.',
   'explorer.close': 'Close the preview',
   'explorer.workspacePick': 'Workspace',
+  'explorer.views': 'Views',
+  'explorer.newTab': 'Add a view',
+  'explorer.closeTab': 'Close tab',
+  'explorer.unmodified': '{n} unmodified lines',
+  'explorer.filterAll': 'All',
+  'explorer.filterStaged': 'Staged',
+  'explorer.filterUnstaged': 'Unstaged',
+  'explorer.reviewGroup': 'Group by folder',
+  'explorer.reviewFlat': 'Flat list',
 
   // Change kinds
   'change.untracked': 'untracked',
@@ -269,6 +301,25 @@ export type LocaleKey = keyof typeof en
 export const zh: Record<LocaleKey, string> = {
   'section.images': '输入框图片',
   'section.images.desc': '在 + 菜单最上面加一条图片入口，草稿图片可拖动改顺序。',
+
+  // Settings tabs
+  'tab.input': '输入与模型',
+  'tab.balance': '余额',
+  'tab.review': '审查',
+  'tab.files': '文件',
+  'tab.sessions': '会话',
+  'tab.plugins': '插件',
+
+  // Balance extras
+  'balance.peak': '高峰',
+  'balance.offPeak': '低谷',
+  'balance.poll': '轮询间隔（秒）',
+  'balance.poll.hint': '余额文字每 N 秒自动刷新。0 表示不轮询。',
+  'balance.peakWindows': '高峰时段 (UTC)',
+  'balance.peakWindows.hint': '官方默认：周一至周五 01:00-04:00 与 06:00-10:00 (UTC)，窗口外半价。逗号分隔 HH:MM-HH:MM。',
+  'balance.peakWeekdays': '周末不计高峰',
+  'balance.peakWeekdays.hint': '官方规则：周六周日全天按低谷计价。',
+  'balance.badge.title': 'DeepSeek 余额 · 高峰窗口 {windows} (UTC) · key 来源 {source}',
   'section.effort': '推理强度',
   'section.effort.desc': '为第三方（pi-ai）线路的每个模型声明推理档位，声明后输入框自带的强度选择器就会对这些模型出现。',
   'section.balance': 'DeepSeek 余额',
@@ -409,6 +460,10 @@ export const zh: Record<LocaleKey, string> = {
   'review.count': '最近 {n} 条判定。',
   'review.matched': '命中规则：',
   'review.off': '命令审核已关闭。',
+  'review.modelPick': '审查模型',
+  'review.modelPick.hint': '从已配置的路由里选择审查模型；供应商随所选模型自动确定。',
+  'review.autoChip': '自动审核',
+  'review.autoChip.hint': '所有命令先交审查模型判定，模型无法判断风险时再询问用户。',
 
   'explorer.side': '停靠位置',
   'explorer.side.left': '左侧',
@@ -416,7 +471,7 @@ export const zh: Record<LocaleKey, string> = {
   'explorer.defaultOpen': '默认展开',
   'explorer.gitignore': '遵循 .gitignore',
   'explorer.preview': '预览',
-  'explorer.changes': '改动',
+  'explorer.changes': '审查',
   'explorer.files': '文件',
   'explorer.noRepo': '不是 git 仓库。',
   'explorer.noChanges': '没有未提交的改动。',
@@ -434,6 +489,15 @@ export const zh: Record<LocaleKey, string> = {
   'explorer.truncatedFile': '…只显示前 {lines} 行。',
   'explorer.close': '关闭预览',
   'explorer.workspacePick': '工作区',
+  'explorer.views': '视图',
+  'explorer.newTab': '新建标签页',
+  'explorer.closeTab': '关闭标签页',
+  'explorer.unmodified': '{n} 行未修改',
+  'explorer.filterAll': '全部',
+  'explorer.filterStaged': '已暂存',
+  'explorer.filterUnstaged': '未暂存',
+  'explorer.reviewGroup': '按文件夹分组',
+  'explorer.reviewFlat': '平铺列表',
 
   'change.untracked': '未跟踪',
   'change.modified': '已修改',

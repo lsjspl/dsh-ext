@@ -1,15 +1,71 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useResource } from './use-resource.ts'
 import { Notice, buttonStyle, token } from './ui.tsx'
 import { useT } from './use-locale.ts'
+import { useClientConfig } from './use-client-config.ts'
 import type { BalanceView as BalanceData } from '../shared/api-contract.ts'
 
 /**
  * Feature 3 — the DeepSeek official API account balance.
  *
  * Two presentations of one endpoint: a full card for the settings page and a
- * compact chip for the session header. Both read the same cached value, so the
- * badge being on costs no extra request.
+ * compact text chip for the composer. Both read the same endpoint; the chip
+ * additionally polls on its own cadence so the number moves while a session
+ * is burning tokens.
  */
+
+/** Is `now` inside one of the configured UTC peak windows (`HH:MM-HH:MM`)? */
+export function isPeakNow(windows: readonly string[], weekdaysOnly: boolean, now = new Date()): boolean {
+  if (weekdaysOnly) {
+    const day = now.getUTCDay()
+    if (day === 0 || day === 6) return false
+  }
+  const minutes = now.getUTCHours() * 60 + now.getUTCMinutes()
+  return windows.some(window => {
+    const match = /^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$/.exec(window)
+    if (match === null) return false
+    const start = Number(match[1]) * 60 + Number(match[2])
+    const end = Number(match[3]) * 60 + Number(match[4])
+    // A window may cross midnight; the wrap-around form matches either side.
+    return start <= end ? minutes >= start && minutes < end : minutes >= start || minutes < end
+  })
+}
+
+/**
+ * The "losing HP" effect: when the balance drops between polls the chip shakes
+ * once, its number flashes red, and the spent amount floats up and fades —
+ * damage numbers, for your wallet. Styles are injected once because keyframes
+ * cannot be written as inline styles.
+ */
+const HURT_CLASS = 'dsh-dev-tool-ext-hurt'
+const DROP_CLASS = 'dsh-dev-tool-ext-drop'
+let badgeStylesInjected = false
+function injectBadgeStyles(): void {
+  if (badgeStylesInjected || typeof document === 'undefined') return
+  badgeStylesInjected = true
+  const style = document.createElement('style')
+  style.dataset.dshPlugin = 'dsh-dev-tool-ext'
+  style.textContent = `
+@keyframes dsh-dev-tool-ext-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  50% { transform: translateX(2px); }
+  75% { transform: translateX(-1px); }
+}
+.${HURT_CLASS} { animation: dsh-dev-tool-ext-shake 0.4s ease-in-out 2; }
+@keyframes dsh-dev-tool-ext-fall {
+  0% { opacity: 1; transform: translateY(2px); }
+  100% { opacity: 0; transform: translateY(-16px); }
+}
+.${DROP_CLASS} {
+  position: absolute; top: -8px; right: 0;
+  font-size: 10px; font-weight: 600; line-height: 1;
+  pointer-events: none; white-space: nowrap;
+  animation: dsh-dev-tool-ext-fall 1.3s ease-out forwards;
+}
+`
+  document.head.appendChild(style)
+}
 
 export function BalanceCard(props: { enabled: boolean }) {
   const t = useT()
@@ -76,29 +132,91 @@ export function BalanceCard(props: { enabled: boolean }) {
 }
 
 /**
- * The header chip. Renders nothing at all until a balance is known: a header is
- * shared space, and an error or a spinner there would be noise about a feature
- * the user did not ask a question of.
+ * The composer chip. Bare text — no pill, no border — because it sits in a row
+ * of real controls and draws the eye only when something changes: the peak or
+ * off-peak marker beside the amount, and a shake-and-float "damage" effect
+ * whenever the balance drops between polls.
  */
 export function BalanceBadge() {
-  const view = useResource<BalanceData>('/balance')
+  const t = useT()
+  injectBadgeStyles()
+  const config = useClientConfig()
+  const balance = config?.deepseekBalance
+  const pollSeconds = balance?.pollSeconds ?? 30
+  const peakWindows = balance?.peakWindowsUtc ?? ['01:00-04:00', '06:00-10:00']
+  const weekdaysOnly = balance?.peakWeekdaysOnly ?? true
+
+  // `refresh=1` bypasses the backend cache — the point of the poll is a fresh
+  // number, and a cached one would make the interval a no-op.
+  const view = useResource<BalanceData>('/balance?refresh=1')
+  const reloadRef = useRef(view.reload)
+  reloadRef.current = view.reload
+  useEffect(() => {
+    if (pollSeconds <= 0) return
+    const timer = window.setInterval(() => { reloadRef.current() }, pollSeconds * 1000)
+    return () => { window.clearInterval(timer) }
+  }, [pollSeconds])
+
   const primary = view.data?.rows[0]
+  const total = useMemo(() => (primary === undefined ? undefined : Number.parseFloat(primary.totalBalance)), [primary])
+
+  // A decrease between polls is "damage": remembered per render, cleared on a
+  // timer. The seq key restarts the float animation for back-to-back drops.
+  const previous = useRef<number | undefined>(undefined)
+  const [drop, setDrop] = useState<{ amount: number; seq: number } | undefined>(undefined)
+  useEffect(() => {
+    if (total === undefined || Number.isNaN(total)) return
+    const before = previous.current
+    previous.current = total
+    if (before !== undefined && total < before) {
+      setDrop({ amount: total - before, seq: Date.now() })
+    }
+  }, [total])
+  useEffect(() => {
+    if (drop === undefined) return
+    const timer = window.setTimeout(() => { setDrop(undefined) }, 1400)
+    return () => { window.clearTimeout(timer) }
+  }, [drop])
+
+  const peak = useMemo(
+    () => isPeakNow(peakWindows, weekdaysOnly),
+    // Re-evaluated whenever the data (and thus roughly the minute) changes;
+    // a wall-clock timer for the boundary minute is not worth a tick.
+    [peakWindows, weekdaysOnly, view.data],
+  )
+
   if (primary === undefined) return null
+
+  const hurt = drop !== undefined
+  const peakText = t(peak ? 'balance.peak' : 'balance.offPeak')
   return (
     <span
       data-dsh-plugin="dsh-dev-tool-ext"
       data-dsh-part="balance-badge"
-      title={`DeepSeek balance · key from ${view.data?.credentialSource ?? 'unknown source'}`}
+      title={t('balance.badge.title', {
+        windows: peakWindows.join(', '),
+        source: view.data?.credentialSource ?? 'unknown',
+      })}
+      className={hurt ? HURT_CLASS : undefined}
       style={{
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        gap: 6,
         fontSize: 11,
-        color: view.data?.available === false ? token.danger : token.textMuted,
-        padding: '2px 6px',
-        border: `1px solid ${token.border}`,
-        borderRadius: 999,
         whiteSpace: 'nowrap',
+        color: view.data?.available === false ? token.danger : token.textMuted,
       }}
     >
-      {primary.totalBalance} {primary.currency}
+      <span style={{ color: peak ? token.warn : token.success }}>{peakText}</span>
+      <span style={hurt ? { color: token.danger } : undefined}>
+        {primary.totalBalance} {primary.currency}
+      </span>
+      {drop !== undefined && (
+        <span key={drop.seq} className={DROP_CLASS} style={{ color: token.danger }}>
+          {drop.amount.toFixed(2)}
+        </span>
+      )}
     </span>
   )
 }

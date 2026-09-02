@@ -32,6 +32,12 @@ export interface DeepseekBalanceConfig {
   enabled: boolean
   cacheTtlSeconds: number
   headerBadge: boolean
+  /** Badge poll interval in seconds; 0 disables polling. */
+  pollSeconds: number
+  /** DeepSeek peak windows in UTC (`HH:MM-HH:MM`); rates are half outside them. */
+  peakWindowsUtc: string[]
+  /** Weekend usage is always off-peak, per the official scheme. */
+  peakWeekdaysOnly: boolean
 }
 
 export type CommandReviewMode = 'rules-only' | 'rules+llm' | 'all'
@@ -152,6 +158,9 @@ export const Config: z<Config> = z.object({
     enabled: z.boolean().default(true).description('Show the DeepSeek official API account balance.'),
     cacheTtlSeconds: z.number().step(1).min(5).max(3600).default(60).description('How long a fetched balance is reused before refetching.'),
     headerBadge: z.boolean().default(true).description('Also show a compact balance chip in the composer, immediately left of the model selector.'),
+    pollSeconds: z.number().step(1).min(0).max(600).default(30).description('Refresh the balance chip every N seconds. 0 disables polling.'),
+    peakWindowsUtc: z.array(z.string()).default(['01:00-04:00', '06:00-10:00']).description('DeepSeek peak windows in UTC (HH:MM-HH:MM); official defaults. Outside them rates are half.'),
+    peakWeekdaysOnly: z.boolean().default(true).description('Weekend usage is always off-peak, per the official scheme.'),
   }),
 
   commandReview: z.object({

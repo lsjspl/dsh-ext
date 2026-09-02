@@ -23,7 +23,7 @@ const { writeFileSync } = await import('node:fs')
 // than treating an absolute URL as an external it should leave alone.
 const entry = join(process.cwd(), 'src', 'parsers.verify.entry.ts')
 writeFileSync(entry, `
-export { parseStatus } from './features/explorer.ts'
+export { parseStatus, parseNumstat } from './features/explorer.ts'
 export { commandText, parseVerdict } from './features/command-review.ts'
 export { spliceRegion, renderRegion, isRowId } from './quarantine.ts'
 `)
@@ -91,6 +91,37 @@ check('a path containing a newline survives',
 check('a conflicted file', mod.parseStatus(`UU both.ts${NUL}`)[0].index, 'U')
 check('empty output yields no rows', mod.parseStatus(''), [])
 check('a truncated record is skipped', mod.parseStatus(`X${NUL}`), [])
+
+process.stdout.write('\ngit numstat -z parsing:\n')
+
+// A rename carries its original path as a fourth tab field; the KEY must stay
+// the new path — the one porcelain names too — not the last field.
+check('counts land on the added/removed pair',
+  mod.parseNumstat(`12\t3\tsrc/app.ts${NUL}`).get('src/app.ts'),
+  { added: 12, removed: 3 })
+
+check('a rename keys the new path',
+  mod.parseNumstat(`1\t0\tnew.ts\told.ts${NUL}`).get('new.ts'),
+  { added: 1, removed: 0 })
+check('a rename does not key the old path',
+  mod.parseNumstat(`1\t0\tnew.ts\told.ts${NUL}`).has('old.ts'),
+  false)
+
+check('a binary file yields no entry',
+  mod.parseNumstat(`-\t-\tblob.png${NUL}`).has('blob.png'),
+  false)
+
+// The status reader parses the staged and unstaged numstats into one map, so a
+// file changed on both sides accumulates: the sum is the change versus HEAD.
+check('duplicate paths accumulate',
+  mod.parseNumstat(`1\t2\ta.ts${NUL}3\t4\ta.ts${NUL}`).get('a.ts'),
+  { added: 4, removed: 6 })
+
+check('a path containing spaces survives',
+  mod.parseNumstat(`5\t6\tsrc/my file with spaces.ts${NUL}`).get('src/my file with spaces.ts'),
+  { added: 5, removed: 6 })
+
+check('empty output yields no entries', [...mod.parseNumstat('')], [])
 
 process.stdout.write('\ncommand extraction:\n')
 

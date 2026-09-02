@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-llm'
 import type { SettingsPathOp } from '@deepseek-ai/dsh-settings'
 import { ApiError, type ApiHandler } from '../http.ts'
 import { NAMESPACE } from '../settings.ts'
@@ -73,6 +74,29 @@ export function settingsRoutes(ctx: Context, config: () => Config): Record<strin
         throw new ApiError(409, message)
       }
       return describe()
+    },
+
+    '/review/models': async () => {
+      // The reviewer runs on the same routes the composer already offers, so
+      // the settings page offers exactly those — a dropdown of what is
+      // configured, instead of hand-typed provider/model strings. The list is
+      // advisory and may be empty on a deployment with no live adapters; the
+      // page then keeps the current selection visible and editable.
+      const llm = ctx.get('llm')
+      if (llm === undefined) return { models: [] }
+      const models: { provider: string; model: string; name: string }[] = []
+      for (const provider of llm.listProviders()) {
+        try {
+          for (const model of await llm.listModels(provider.id)) {
+            models.push({
+              provider: provider.id,
+              model: model.id,
+              name: typeof model.name === 'string' && model.name.length > 0 ? model.name : model.id,
+            })
+          }
+        } catch { /* a dormant route cannot be listed right now */ }
+      }
+      return { models }
     },
   }
 }

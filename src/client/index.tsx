@@ -20,11 +20,15 @@ import { BalanceBadge } from './BalanceView.tsx'
 import { hasImagePicker, openImagePicker, subscribeImagePicker } from './picker-channel.ts'
 import { DICTS, LOCALE_NS } from './locales.ts'
 import { provideLocale, translate, useT } from './use-locale.ts'
-import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, iconButtonStyle } from './icons.tsx'
+import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, ShieldCheckIcon, VscodeIcon, iconButtonStyle } from './icons.tsx'
+import { Toast } from '@deepseek-ai/dsh-client-ui-primitives'
+import { callApi } from './api.ts'
 import { setPanelOpen, setPanelSession, usePanelOpen } from './panel-state.ts'
 import { useActiveWorkspace, type WorkspacesHook } from './use-workspace.ts'
 import { readClientConfig, useClientConfig } from './use-client-config.ts'
+import { useConfig } from './use-config.ts'
 import { token } from './ui.tsx'
+import type { OpenEditorResult } from '../shared/api-contract.ts'
 
 export const name = 'dsh-dev-tool-ext-client'
 /**
@@ -96,8 +100,10 @@ export function apply(ctx: Context): void {
   // renders the row that exposes them.
   registerModelPicker(ctx)
   registerBalanceBadge(ctx)
+  registerAutoReviewMode(ctx)
   registerSidePanel(ctx)
   registerExplorerToggles(ctx)
+  registerOpenEditorLauncher(ctx)
 }
 
 /**
@@ -382,6 +388,74 @@ function registerBalanceBadge(ctx: Context): void {
 }
 
 /**
+ * Feature 4's composer affordance — 自动审核 as a permission-style mode.
+ *
+ * The host's permission-mode select (read-only / workspace-write /
+ * danger-full-access) is data-driven, but its option list is projected from the
+ * session and a plugin cannot append to it — and the one seat inside that
+ * cluster (`conversation.input.plan`) is already occupied by the plan plugin.
+ * The nearest free seat is `conversation.input.left`, which the composer
+ * renders immediately after the mode cluster on the same row — the affordance
+ * therefore sits flush against the permission select, in the mode family's own
+ * visual style.
+ *
+ * Turning it on writes the whole auto-review contract in one fenced write:
+ * every covered tool call goes to the reviewer model (`mode: 'all'`), and a
+ * verdict the model cannot reach — or a timeout, or an error — escalates to
+ * the user (`onFailure: 'ask'`). Turning it off only clears `enabled`, so the
+ * model/timeout choices survive for next time.
+ */
+function registerAutoReviewMode(ctx: Context): void {
+  trySlot('auto review mode', () => {
+    ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+      name: 'conversation.input.left',
+      id: 'dsh-dev-tool-ext-auto-review',
+      order: 0,
+      registrant: 'dsh-dev-tool-ext',
+    }, function DevToolAutoReviewMode() {
+      const t = useT()
+      const { view, busy, setMany } = useConfig()
+      if (view === undefined) return null
+      const review = view.value.commandReview
+      const enabled = review.enabled === true && review.mode === 'all'
+      return (
+        <button
+          type="button"
+          aria-pressed={enabled}
+          title={t('review.autoChip.hint')}
+          disabled={busy}
+          onClick={() => {
+            setMany(enabled
+              ? [{ path: ['commandReview', 'enabled'], value: false }]
+              : [
+                  { path: ['commandReview', 'enabled'], value: true },
+                  { path: ['commandReview', 'mode'], value: 'all' },
+                  { path: ['commandReview', 'onFailure'], value: 'ask' },
+                ])
+          }}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            fontSize: 12,
+            padding: '3px 9px',
+            border: `1px solid ${enabled ? token.accent : token.border}`,
+            borderRadius: 999,
+            background: enabled ? 'var(--dsw-alias-interactive-bg-hover, transparent)' : 'transparent',
+            color: enabled ? token.accent : token.textMuted,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <ShieldCheckIcon size={13} />
+          {t('review.autoChip')}
+        </button>
+      )
+    }))
+  })
+}
+
+/**
  * Feature 5 — the explorer, docked to a frame edge.
  *
  * `shell.overlay` is a root-scope `list` seat spanning the whole frame, which is
@@ -456,6 +530,69 @@ function registerExplorerToggles(ctx: Context): void {
         >
           <Icon />
         </button>
+      )
+    }))
+  })
+}
+
+/**
+ * Feature 5's launcher — an "open the project in VS Code" button in the session
+ * header.
+ *
+ * It lives in this seat rather than the panel's own toolbar because the launch
+ * target is the session's project, not a view inside the panel; and its `order`
+ * sits directly above the session-log-export plugin's (order 1), so the two
+ * project-level buttons read as neighbours.
+ *
+ * The session id is the launch argument: the backend resolves the workspace
+ * from that session's own cwd, so VS Code opens the project this conversation
+ * is actually about. A failed launch is announced with the host's toast — a
+ * header button has no panel beneath it to print an error into.
+ */
+function registerOpenEditorLauncher(ctx: Context): void {
+  trySlot('explorer open-editor launcher', () => {
+    ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
+      name: 'conversation.session.header.utilities',
+      id: 'dsh-dev-tool-ext-open-editor',
+      order: 2,
+      registrant: 'dsh-dev-tool-ext',
+    }, function DevToolOpenEditorLauncher(props: { sessionId?: string }) {
+      const t = useT()
+      const config = useClientConfig()
+      const [busy, setBusy] = useState(false)
+      const [failure, setFailure] = useState<{ text: string; seq: number } | undefined>(undefined)
+      if (config?.explorer.enabled !== true) return null
+
+      const open = async () => {
+        setBusy(true)
+        setFailure(undefined)
+        const session = props.sessionId !== undefined && props.sessionId.length > 0
+          ? `?session=${encodeURIComponent(props.sessionId)}`
+          : ''
+        const result = await callApi<OpenEditorResult>(`/explorer/open-editor${session}`)
+        setBusy(false)
+        if (!result.ok) {
+          setFailure({ text: t('explorer.openEditorFailed', { message: result.message }), seq: Date.now() })
+        }
+      }
+
+      return (
+        <>
+          <button
+            type="button"
+            aria-label={t('explorer.openEditor')}
+            title={t('explorer.openEditor')}
+            disabled={busy}
+            onClick={() => { void open() }}
+            style={iconButtonStyle}
+          >
+            <VscodeIcon size={16} />
+          </button>
+          {failure !== undefined && (
+            // Keyed by a per-show sequence: re-showing restarts the fade.
+            <Toast key={failure.seq} text={failure.text} onDone={() => { setFailure(undefined) }} />
+          )}
+        </>
       )
     }))
   })

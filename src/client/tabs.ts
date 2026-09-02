@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react'
  */
 
 /** The views a tab can hold. */
-export type TabKind = 'files' | 'changes' | 'editor'
+export type TabKind = 'files' | 'review' | 'editor' | 'diff'
 
 export interface Tab {
   /** Stable across renders and reorders, so React keys and the active id agree. */
@@ -36,22 +36,23 @@ interface TabState {
 const STORAGE_KEY = 'dsh-dev-tool-ext:side-panel-tabs'
 
 /**
- * The opening layout: the file browser, because that is the view the panel is
- * most often opened *for*, and the change list beside it.
+ * The opening layout: the file browser and the review list — the two views the
+ * panel is most often opened *for*.
  */
 function initial(): TabState {
   return {
-    tabs: [{ id: 'files', kind: 'files' }, { id: 'changes', kind: 'changes' }],
+    tabs: [{ id: 'files', kind: 'files' }, { id: 'review', kind: 'review' }],
     activeId: 'files',
   }
 }
 
 /**
- * Editor tabs are keyed by path so opening the same file twice focuses the
- * existing tab instead of stacking duplicates — the behaviour every editor has.
+ * Editor and diff tabs are keyed by path so opening the same file twice focuses
+ * the existing tab instead of stacking duplicates — the behaviour every editor
+ * has.
  */
 function tabId(kind: TabKind, path?: string): string {
-  return kind === 'editor' ? `editor:${path ?? ''}` : kind
+  return kind === 'editor' || kind === 'diff' ? `${kind}:${path ?? ''}` : kind
 }
 
 let state: TabState | undefined
@@ -67,12 +68,15 @@ function read(): TabState {
     if (!Array.isArray(raw)) return initial()
     const tabs = raw.flatMap((entry): Tab[] => {
       if (typeof entry !== 'object' || entry === null) return []
-      const kind = (entry as { kind?: unknown }).kind
+      const rawKind = (entry as { kind?: unknown }).kind
+      // Storage written before the change list became the review list names the
+      // kind `changes`; map it forward rather than dropping the user's layout.
+      const kind = rawKind === 'changes' ? 'review' : rawKind
       const path = (entry as { path?: unknown }).path
-      if (kind !== 'files' && kind !== 'changes' && kind !== 'editor') return []
-      // An editor tab with no path could never render anything; drop it rather
-      // than showing an empty pane with a close button.
-      if (kind === 'editor' && typeof path !== 'string') return []
+      if (kind !== 'files' && kind !== 'review' && kind !== 'editor' && kind !== 'diff') return []
+      // A tab with no path could never render anything; drop it rather than
+      // showing an empty pane with a close button.
+      if ((kind === 'editor' || kind === 'diff') && typeof path !== 'string') return []
       return [{ id: tabId(kind, typeof path === 'string' ? path : undefined), kind, ...(typeof path === 'string' ? { path } : {}) }]
     })
     if (tabs.length === 0) return initial()

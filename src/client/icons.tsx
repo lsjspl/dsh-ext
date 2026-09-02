@@ -198,3 +198,23 @@ export function GitIcon(props: IconProps) {
     </svg>
   )
 }
+
+/**
+ * A shield with a check inside — the auto-review affordance. The shield keeps
+ * it in the permission-mode family (the host's own mode glyphs are shields);
+ * the check says "adjudicated", not merely guarded.
+ */
+export function ShieldCheckIcon(props: IconProps) {
+  const size = props.size ?? 14
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M8.2 1L14.8 3.5V7C14.8 12 11.05 14.2 8.2 15.1C5.35 14.2 1.6 12 1.6 7V3.5L8.2 1Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path d="M5.4 7.7L7.4 9.7L11 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
