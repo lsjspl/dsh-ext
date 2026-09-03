@@ -8,24 +8,34 @@ import type { Config } from '../config.ts'
  *
  * Deliberately a module-level cache rather than a hook-local fetch: the composer
  * has several entries (the rail, the picker button, the explorer dock, the
- * balance chip) that all need the same answer, and every one of them mounts on
- * every session switch. A per-component fetch would mean four requests per
- * switch for a value that changes only when someone edits Settings.
+ * balance chip, auto-review toggle) that all need the same answer, and every one
+ * of them mounts on session switch.
  *
  * Settings edits go through the settings page, which invalidates this cache on a
- * successful write, so a toggle takes effect without a reload.
+ * successful write, so a toggle takes effect immediately without a reload.
  */
+
+interface ConfigResponse {
+  readonly value: Config
+  readonly revision: number
+  readonly user: unknown
+  readonly writable: boolean
+}
 
 let cached: Config | undefined
 let inFlight: Promise<void> | undefined
 const listeners = new Set<() => void>()
 
 function publish(): void {
-  for (const listener of listeners) listener()
+  for (const listener of listeners) {
+    try {
+      listener()
+    } catch {}
+  }
 }
 
 async function load(): Promise<void> {
-  const result = await callApi<{ value: Config }>('/config')
+  const result = await callApi<ConfigResponse>('/config')
   if (result.ok) {
     cached = result.value.value
     publish()
@@ -37,21 +47,60 @@ function ensure(): void {
   inFlight = load().finally(() => { inFlight = undefined })
 }
 
-/** Drop the cache and refetch. Called after a settings write commits. */
-export function invalidateClientConfig(): void {
+/** Drop the cache and refetch, or apply immediately if nextConfig is provided. */
+export function invalidateClientConfig(nextConfig?: Config): void {
+  if (nextConfig !== undefined) {
+    cached = nextConfig
+    publish()
+    return
+  }
   cached = undefined
   inFlight = load().finally(() => { inFlight = undefined })
 }
 
+/** Subscribe to client config changes. */
+export function subscribeClientConfig(listener: () => void): () => void {
+  listeners.add(listener)
+  ensure()
+  return () => { listeners.delete(listener) }
+}
+
+/** Mutate config directly from conversation surfaces and publish instantly. */
+export async function mutateClientConfig(ops: readonly { path: readonly string[]; value: unknown }[]): Promise<boolean> {
+  // Optimistically apply to cache for instant UI feedback
+  if (cached !== undefined) {
+    const next = JSON.parse(JSON.stringify(cached)) as Record<string, any>
+    for (const op of ops) {
+      if (op.path.length === 2) {
+        const [sec, key] = op.path
+        if (sec && key && next[sec]) {
+          next[sec][key] = op.value
+        }
+      }
+    }
+    cached = next as unknown as Config
+    publish()
+  }
+
+  const result = await callApi<ConfigResponse>('/config/mutate', {
+    body: {
+      ops: ops.map(op => ({ op: 'set', path: op.path, value: op.value })),
+    },
+  })
+
+  if (result.ok) {
+    cached = result.value.value
+    publish()
+    return true
+  }
+
+  // Refetch if mutate failed
+  invalidateClientConfig()
+  return false
+}
+
 /**
  * The cached config, for callers that are not components.
- *
- * The input-trigger source answers its candidate query in a plain async
- * callback, so it cannot subscribe through the hook below. It also must not
- * block that query on a fetch: the menu is already open by then, and returning
- * late reads as a dropped row. So this returns whatever is cached and kicks off
- * the first load — a menu opened before any surface has mounted misses the
- * entry once, and the next open has it.
  */
 export function readClientConfig(): Config | undefined {
   ensure()
@@ -60,10 +109,7 @@ export function readClientConfig(): Config | undefined {
 
 /**
  * The plugin's effective config, or `undefined` until the first read lands.
- *
- * Every caller treats `undefined` as "render nothing": a feature surface that
- * flashed into view before its switch was known would appear for a moment even
- * when it is turned off, which is worse than appearing a moment late.
+ * Automatically triggers a re-render whenever the config changes.
  */
 export function useClientConfig(): Config | undefined {
   const [, bump] = useState(0)

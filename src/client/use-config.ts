@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { callApi } from './api.ts'
-import { invalidateClientConfig } from './use-client-config.ts'
+import { invalidateClientConfig, subscribeClientConfig } from './use-client-config.ts'
 import type { Config } from '../config.ts'
 
 export interface ConfigView {
@@ -54,6 +54,12 @@ export function useConfig(): ConfigStore {
 
   const reload = useCallback(() => { setNonce(n => n + 1) }, [])
 
+  useEffect(() => {
+    return subscribeClientConfig(() => {
+      reload()
+    })
+  }, [reload])
+
   const setMany = useCallback((ops: readonly ConfigOp[]) => {
     setBusy(true)
     void (async () => {
@@ -68,8 +74,8 @@ export function useConfig(): ConfigStore {
         setView(result.value)
         setError(undefined)
         // The conversation surfaces read a separate cache; a switch flipped here
-        // has to reach them without a page reload.
-        invalidateClientConfig()
+        // has to reach them immediately without a page reload.
+        invalidateClientConfig(result.value.value)
       } else {
         setError(result.message)
         reload()

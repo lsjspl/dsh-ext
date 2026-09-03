@@ -209,7 +209,9 @@ function findDefaultOfficialFlash(models: readonly { provider: string; model: st
 
   if (matched.length === 0) return undefined
   matched.sort((a, b) => a.model.length - b.model.length)
-  return { provider: matched[0].provider, model: matched[0].model }
+  const first = matched[0]
+  if (!first) return undefined
+  return { provider: first.provider, model: first.model }
 }
 
 export function SettingsPage() {
@@ -455,7 +457,14 @@ export function SettingsPage() {
                 onChange={next => { set(['commandReview', 'enabled'], next) }} />}
               onReset={() => { resetSection('commandReview') }}
             >
-              <div style={{ padding: '6px 0 14px' }}>
+              <Row
+                label={t('review.autoReview')}
+                hint={t('review.autoReview.hint')}
+                control={<Toggle label={t('review.autoReview')} checked={c.commandReview.autoReview ?? false} disabled={disabled || !c.commandReview.enabled}
+                  onChange={next => { set(['commandReview', 'autoReview'], next) }} />}
+              />
+
+              <div style={{ padding: '10px 0 14px' }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: token.text, marginBottom: 8 }}>
                   审核模式
                 </div>

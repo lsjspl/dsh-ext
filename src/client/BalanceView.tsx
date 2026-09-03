@@ -122,11 +122,21 @@ export function BalanceCard(props: { enabled: boolean }) {
           )}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 10, color: token.textMuted }}>
+            <span style={{ fontSize: 11, color: token.textMuted }}>
               {new Date(view.data.fetchedAt).toLocaleTimeString()} · {t('balance.keyFrom', { source: view.data.credentialSource })}
             </span>
             <span style={{ flex: 1 }} />
-            <button type="button" onClick={view.reload} style={{ ...buttonStyle, fontSize: 11 }}>{t('common.refresh')}</button>
+            <button
+              type="button"
+              onClick={view.reload}
+              style={buttonStyle}
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M2.5 6.5A5.5 5.5 0 1 1 4 11.5" />
+                <path d="M2.5 3v3.5H6" />
+              </svg>
+              <span>{t('common.refresh')}</span>
+            </button>
           </div>
         </>
       )}

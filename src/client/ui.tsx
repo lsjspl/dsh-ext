@@ -118,28 +118,33 @@ export function Section(props: {
               onClick={props.onReset}
               title={t('common.reset')}
               style={{
-                appearance: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
                 background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))',
                 border: `1px solid ${token.border}`,
-                borderRadius: 14,
-                padding: '3px 10px',
+                borderRadius: 6,
+                padding: '4px 10px',
                 fontSize: 12,
-                lineHeight: '16px',
                 fontWeight: 500,
-                color: token.textMuted,
+                color: token.text,
                 cursor: 'pointer',
                 transition: 'all 120ms ease',
               }}
               onMouseEnter={e => {
-                e.currentTarget.style.color = token.text
-                e.currentTarget.style.borderColor = 'var(--dsw-alias-border-l1, rgba(125,125,125,0.4))'
+                e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover, rgba(125, 125, 125, 0.2))'
+                e.currentTarget.style.borderColor = 'var(--dsw-alias-border-l1, rgba(125, 125, 125, 0.4))'
               }}
               onMouseLeave={e => {
-                e.currentTarget.style.color = token.textMuted
+                e.currentTarget.style.background = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))'
                 e.currentTarget.style.borderColor = token.border
               }}
             >
-              {t('common.reset')}
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M2.5 6.5A5.5 5.5 0 1 1 4 11.5" />
+                <path d="M2.5 3v3.5H6" />
+              </svg>
+              <span>{t('common.reset')}</span>
             </button>
           )}
           {props.action !== undefined && (
@@ -343,10 +348,38 @@ export const inputStyle: CSSProperties = {
 
 
 export const buttonStyle: CSSProperties = {
-  ...inputStyle,
+  font: 'inherit',
+  fontSize: 12,
+  fontWeight: 500,
+  color: token.text,
+  background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))',
+  border: `1px solid ${token.border}`,
+  borderRadius: 6,
+  padding: '5px 12px',
+  outline: 'none',
+  boxSizing: 'border-box',
   cursor: 'pointer',
   userSelect: 'none',
-  background: 'var(--dsw-alias-bg-layer-2, color-mix(in srgb, currentColor 5%, transparent))',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 5,
+  whiteSpace: 'nowrap',
+  transition: 'all 120ms ease',
+}
+
+export const dangerButtonStyle: CSSProperties = {
+  ...buttonStyle,
+  background: 'rgba(239, 68, 68, 0.08)',
+  color: 'var(--dsw-alias-state-danger, #ef4444)',
+  borderColor: 'rgba(239, 68, 68, 0.25)',
+}
+
+export const primaryButtonStyle: CSSProperties = {
+  ...buttonStyle,
+  background: 'var(--dsw-alias-state-business-primary, #2563eb)',
+  color: '#ffffff',
+  borderColor: 'var(--dsw-alias-state-business-primary, #2563eb)',
 }
 
 

@@ -319,7 +319,7 @@ export function mountCommandReview(
 
   const dispose = ctx.on('tools/pre-execute', async function (exec: ToolExecution, next): Promise<PreToolDecision> {
     const settings = config().commandReview
-    if (!settings.enabled) return await next()
+    if (!settings.enabled || !settings.autoReview) return await next()
 
     const command = commandText(exec.arguments)
     if (command.trim().length === 0) return await next()

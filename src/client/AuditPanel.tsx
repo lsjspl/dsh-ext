@@ -1,5 +1,5 @@
 import { useCommand, useResource } from './use-resource.ts'
-import { Notice, buttonStyle, token } from './ui.tsx'
+import { Notice, buttonStyle, dangerButtonStyle, token } from './ui.tsx'
 import { useT } from './use-locale.ts'
 import type { AuditEntry } from '../shared/api-contract.ts'
 
@@ -43,14 +43,31 @@ export function AuditPanel(props: { enabled: boolean }) {
           {entries.length === 0 ? t('review.empty') : t('review.count', { n: entries.length })}
         </span>
         <span style={{ flex: 1 }} />
-        <button type="button" onClick={view.reload} style={{ ...buttonStyle, fontSize: 11 }}>{t('common.refresh')}</button>
+        <button
+          type="button"
+          onClick={view.reload}
+          style={buttonStyle}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M2.5 6.5A5.5 5.5 0 1 1 4 11.5" />
+            <path d="M2.5 3v3.5H6" />
+          </svg>
+          <span>{t('common.refresh')}</span>
+        </button>
         {entries.length > 0 && (
           <button
             type="button"
             disabled={command.busy}
             onClick={() => { void command.run('/review/audit/clear') }}
-            style={{ ...buttonStyle, fontSize: 11 }}
-          >{t('common.clear')}</button>
+            style={dangerButtonStyle}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M2.5 4.5h11" />
+              <path d="M5.5 4.5V2.5h5v2" />
+              <path d="M4 4.5l.8 9.2a1 1 0 0 0 1 .8h4.4a1 1 0 0 0 1-.8L12 4.5" />
+            </svg>
+            <span>{t('common.clear')}</span>
+          </button>
         )}
       </div>
 

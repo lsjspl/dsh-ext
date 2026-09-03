@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import { callApi } from './api.ts'
 import { useResource } from './use-resource.ts'
-import { Notice, buttonStyle, token } from './ui.tsx'
+import { Notice, buttonStyle, dangerButtonStyle, primaryButtonStyle, token } from './ui.tsx'
 import { useT } from './use-locale.ts'
 import { DEFAULT_EFFORT_LADDER, THINKING_LEVELS, type EffortProvider, type EffortRung, type ThinkingLevel } from '../shared/api-contract.ts'
 
@@ -155,7 +155,7 @@ function ModelEditor(props: {
           type="button"
           disabled={props.disabled || busy}
           onClick={() => { void save(rungs.map(rung => ({ id: rung.id, wire: rung.wire.length === 0 ? null : rung.wire }))) }}
-          style={{ ...buttonStyle, borderColor: token.accent, color: token.accent }}
+          style={primaryButtonStyle}
         >{busy ? t('common.loading') : t('common.save')}</button>
         <button
           type="button"

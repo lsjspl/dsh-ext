@@ -199,6 +199,8 @@ export const en = {
   'review.modelPick.hint': 'Pick the reviewer from the configured routes; the provider follows the chosen model.',
   'review.autoChip': 'Auto review',
   'review.autoChip.hint': 'Every write command is adjudicated by the reviewer model first; commands whose risk the model cannot judge escalate to you.',
+  'review.autoReview': 'Chat auto-review',
+  'review.autoReview.hint': 'When enabled, commands in chat sessions are screened and reviewed. When disabled, review is paused.',
 
   // Explorer
   'explorer.side': 'Side',
@@ -271,6 +273,7 @@ export const en = {
   'plugins.quarantined': 'quarantined',
   'plugins.quarantinedCount': '{n} plugin(s) are quarantined and will not load on the next start.',
   'plugins.enable': 'Enable',
+  'plugins.enableAll': 'Enable all',
   'plugins.disable': 'Disable',
   'plugins.rescueTitle': 'Fault Rescue Mechanism',
   'plugins.rescueBody': 'When a third-party plugin causes Harness startup to fail, use these recovery mechanisms:',
@@ -523,6 +526,8 @@ export const zh: Record<LocaleKey, string> = {
   'review.modelPick.hint': '从已配置的路由里选择审查模型；供应商随所选模型自动确定。',
   'review.autoChip': '自动审核',
   'review.autoChip.hint': '所有写命令先交审查模型判定，模型无法判断风险时再询问用户。',
+  'review.autoReview': '聊天自动审核',
+  'review.autoReview.hint': '开启后，会话中的命令才会真正触发规则与模型审查；关闭时处于暂停放行状态。',
 
   'explorer.side': '停靠位置',
   'explorer.side.left': '左侧',

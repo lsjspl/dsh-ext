@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import { callApi } from './api.ts'
 import { useCommand, useResource } from './use-resource.ts'
-import { Notice, buttonStyle, token } from './ui.tsx'
+import { Notice, buttonStyle, dangerButtonStyle, primaryButtonStyle, token } from './ui.tsx'
 import { useT } from './use-locale.ts'
 import type { CheckpointRow, RestorePreview } from '../shared/api-contract.ts'
 
@@ -97,10 +97,21 @@ export function CheckpointsPanel(props: { sessionId?: string; enabled: boolean }
           type="button"
           disabled={command.busy}
           onClick={() => { void command.run('/checkpoints/snapshot', { session: props.sessionId, label: 'manual checkpoint' }) }}
-          style={buttonStyle}
-        >{t('cp.take')}</button>
+          style={primaryButtonStyle}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M8 3v10M3 8h10" />
+          </svg>
+          {t('cp.take')}
+        </button>
         <span style={{ flex: 1 }} />
-        <button type="button" onClick={list.reload} style={{ ...buttonStyle, fontSize: 11 }}>{t('common.refresh')}</button>
+        <button type="button" onClick={list.reload} style={buttonStyle}>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M2.5 6.5A5.5 5.5 0 1 1 4 11.5" />
+            <path d="M2.5 3v3.5H6" />
+          </svg>
+          {t('common.refresh')}
+        </button>
       </div>
 
       {list.error !== undefined && <Notice kind="error">{list.error}</Notice>}
@@ -135,8 +146,10 @@ export function CheckpointsPanel(props: { sessionId?: string; enabled: boolean }
               type="button"
               disabled={command.busy}
               onClick={() => { void confirmRestore() }}
-              style={{ ...buttonStyle, borderColor: token.danger, color: token.danger }}
-            >{command.busy ? t('cp.restoring') : t('common.restore')}</button>
+              style={dangerButtonStyle}
+            >
+              {command.busy ? t('cp.restoring') : t('common.restore')}
+            </button>
             <button type="button" onClick={() => { setPending(undefined) }} style={buttonStyle}>{t('common.cancel')}</button>
           </div>
         </div>

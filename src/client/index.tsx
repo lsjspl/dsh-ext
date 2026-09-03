@@ -27,11 +27,11 @@ import { hasImagePicker, openImagePicker, subscribeImagePicker } from './picker-
 import { DICTS, LOCALE_NS } from './locales.ts'
 import { provideLocale, translate, useT } from './use-locale.ts'
 import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, ShieldCheckIcon, VscodeIcon, FolderIcon, IdeaIcon, TrashIcon, iconButtonStyle } from './icons.tsx'
-import { Toast } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Toast, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { callApi } from './api.ts'
 import { setPanelOpen, setPanelSession, usePanelOpen } from './panel-state.ts'
 import { useActiveWorkspace, type WorkspacesHook } from './use-workspace.ts'
-import { readClientConfig, useClientConfig } from './use-client-config.ts'
+import { mutateClientConfig, readClientConfig, useClientConfig } from './use-client-config.ts'
 import { useConfig } from './use-config.ts'
 import { token } from './ui.tsx'
 import type { OpenEditorResult } from '../shared/api-contract.ts'
@@ -445,35 +445,30 @@ function registerAutoReviewMode(ctx: Context): void {
       registrant: 'dsh-ext',
     }, function DevToolAutoReviewMode() {
       const t = useT()
-      const { view, busy, setMany } = useConfig()
-      if (view === undefined) return null
-      const review = view.value.commandReview
-      // VISIBILITY FIX: Only show the button when commandReview feature is enabled
-      // in settings. The button toggles the auto-review mode (all tools, write-only),
-      // but if the feature itself is off, there's no review to configure.
+      const config = useClientConfig()
+      const [busy, setBusy] = useState(false)
+
+      if (config === undefined) return null
+      const review = config.commandReview
+
+      // 1: 命令审核开启的时候自动审核才显示
       if (review.enabled !== true) return null
-      // Auto mode is active only when all three conditions are met
-      const autoModeActive = review.enabled === true && review.mode === 'all' && (review.writeOnly ?? true)
+
+      // 2: 自动审核默认关闭
+      const autoModeActive = review.autoReview === true
+
       return (
         <button
           type="button"
           aria-pressed={autoModeActive}
-          title={t('review.autoChip.hint')}
+          title={autoModeActive ? `${t('review.autoChip')}：已开启（点击关闭）` : `${t('review.autoChip')}：已关闭（点击开启）`}
           disabled={busy}
           onClick={() => {
-            // Toggle the entire auto-review preset on/off
-            setMany(autoModeActive
-              ? [
-                  { path: ['commandReview', 'enabled'], value: false },
-                  { path: ['commandReview', 'mode'], value: 'rules+llm' },
-                ]
-              : [
-                  { path: ['commandReview', 'enabled'], value: true },
-                  { path: ['commandReview', 'mode'], value: 'all' },
-                  { path: ['commandReview', 'writeOnly'], value: true },
-                  { path: ['commandReview', 'absoluteDenyDelete'], value: true },
-                  { path: ['commandReview', 'onFailure'], value: 'ask' },
-                ])
+            // 4: 自动审核的开启关闭不影响命令审核的启动状态
+            setBusy(true)
+            void mutateClientConfig([
+              { path: ['commandReview', 'autoReview'], value: !autoModeActive },
+            ]).finally(() => { setBusy(false) })
           }}
           style={{
             display: 'inline-flex',
@@ -481,13 +476,17 @@ function registerAutoReviewMode(ctx: Context): void {
             gap: 5,
             fontSize: 12,
             padding: '3px 9px',
-            border: `1px solid ${autoModeActive ? token.accent : token.border}`,
+            border: `1px solid ${autoModeActive ? 'var(--dsw-alias-state-business-primary, #2563eb)' : token.border}`,
             borderRadius: 999,
-            background: autoModeActive ? 'var(--dsw-alias-interactive-bg-hover, transparent)' : 'transparent',
-            color: autoModeActive ? token.accent : token.textMuted,
+            background: autoModeActive ? 'rgba(37, 99, 235, 0.12)' : 'transparent',
+            color: autoModeActive ? 'var(--dsw-alias-state-business-primary, #2563eb)' : token.textMuted,
             cursor: 'pointer',
             whiteSpace: 'nowrap',
+            transition: 'all 140ms ease',
+            opacity: autoModeActive ? 1 : 0.8,
           }}
+          onMouseEnter={e => { e.currentTarget.style.opacity = '1' }}
+          onMouseLeave={e => { e.currentTarget.style.opacity = autoModeActive ? '1' : '0.8' }}
         >
           <ShieldCheckIcon size={13} />
           {t('review.autoChip')}
@@ -919,8 +918,8 @@ function registerRecycleBin(ctx: Context): void {
       const config = useClientConfig()
       const [open, setOpen] = useState(false)
       if (config?.sessionAdmin.enabled !== true) return null
-      // Matches the Settings trigger row beside it: wide shows icon + label,
-      // the collapsed rail shows only the icon, centred.
+      // Matches the Settings trigger row beside it exactly: 42px height, 14px font,
+      // 12px border radius, 0 10px 0 8px padding, 4px -2px margin, and wide/rail icon sizes.
       return (
         <>
           <button
@@ -929,27 +928,37 @@ function registerRecycleBin(ctx: Context): void {
             title={t('sessions.trashButton')}
             onClick={() => { setOpen(true) }}
             style={{
-              display: 'inline-flex',
+              boxSizing: 'border-box',
+              cursor: 'pointer',
+              width: props.wide ? 'calc(100% + 4px)' : 36,
+              height: props.wide ? 42 : 36,
+              color: 'var(--dsw-alias-label-primary)',
+              background: 'transparent',
+              border: 'none',
+              borderRadius: props.wide ? 12 : '50%',
+              flex: 'none',
+              display: 'flex',
               alignItems: 'center',
               justifyContent: props.wide ? 'flex-start' : 'center',
-              gap: 8,
-              width: props.wide ? '100%' : 44,
-              height: 34,
-              padding: props.wide ? '0 10px' : 0,
-              border: 'none',
-              borderRadius: 8,
-              background: 'transparent',
-              color: 'var(--dsw-alias-label-secondary, currentColor)',
-              cursor: 'pointer',
-              fontSize: 12,
+              gap: props.wide ? 8 : 0,
+              margin: props.wide ? '4px -2px' : '8px 0 10px',
+              padding: props.wide ? '0 10px 0 8px' : 0,
+              fontFamily: 'inherit',
+              fontSize: 14,
+              lineHeight: '22px',
+              overflow: 'hidden',
               whiteSpace: 'nowrap',
-              flex: '0 0 auto',
+              transition: 'background 120ms ease',
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,0.08))' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)' }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
           >
-            <TrashIcon size={16} />
-            {props.wide && <span>{t('sessions.trashButton')}</span>}
+            <IconTrashOutline16 size={props.wide ? 16 : 18} />
+            {props.wide && (
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden' }}>
+                {t('sessions.trashButton')}
+              </span>
+            )}
           </button>
           <TrashModal open={open} onClose={() => { setOpen(false) }} />
         </>

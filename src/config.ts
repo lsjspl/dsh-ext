@@ -49,6 +49,8 @@ export type CommandReviewFallback = 'ask' | 'deny' | 'allow'
 
 export interface CommandReviewConfig {
   enabled: boolean
+  /** Whether auto-review is active in chat sessions. When false, commands pass through without review even if commandReview is enabled. */
+  autoReview: boolean
   mode: CommandReviewMode
   tools: string[]
   /** Skip tool calls the host classifies as concurrency-safe/read-only. */
@@ -199,6 +201,7 @@ export const Config: z<Config> = z.object({
 
   commandReview: z.object({
     enabled: z.boolean().default(true).description('Have a second model review high-risk tool calls before they run.'),
+    autoReview: z.boolean().default(false).description('Chat auto-review switch. When false, command review is paused in chat.'),
     mode: z.union([
       z.const('rules-only').description('Screen with local patterns only; never call a model.'),
       z.const('rules+llm').description('Screen locally, then send hits to the reviewer model.'),
@@ -275,6 +278,7 @@ export const DEFAULT_CONFIG: Config = {
   },
   commandReview: {
     enabled: true,
+    autoReview: false,
     mode: 'rules+llm',
     tools: ['bash', 'pwsh', 'run_command'],
     writeOnly: true,
