@@ -7,12 +7,16 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // `modelDirectories` onto the context. Types only — neither is a runtime import,
 // so they add nothing to the bundle.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Brings `sidebar.footer.action` (the footer seat beside Settings) into the
+// SlotMap through the sidebar package's declaration merge.
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { ModelSelectInjected } from '@deepseek-ai/dsh-client-ui-model-selection/client'
 // Declares `ctx.inputTriggers`, the roster the slash menu renders its groups from.
 import type { InputTriggerServiceContract } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import { SettingsPage } from './SettingsPage.tsx'
+import { TrashModal } from './TrashModal.tsx'
 import { TurnChangesCard, CardBoundary } from './TurnChangesCard.tsx'
 import { UserEditBubble } from './UserEditBubble.tsx'
 import { ComposerImages } from './ComposerImages.tsx'
@@ -22,7 +26,7 @@ import { BalanceBadge } from './BalanceView.tsx'
 import { hasImagePicker, openImagePicker, subscribeImagePicker } from './picker-channel.ts'
 import { DICTS, LOCALE_NS } from './locales.ts'
 import { provideLocale, translate, useT } from './use-locale.ts'
-import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, ShieldCheckIcon, VscodeIcon, FolderIcon, IdeaIcon, iconButtonStyle } from './icons.tsx'
+import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, ShieldCheckIcon, VscodeIcon, FolderIcon, IdeaIcon, TrashIcon, iconButtonStyle } from './icons.tsx'
 import { Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import { callApi } from './api.ts'
 import { setPanelOpen, setPanelSession, usePanelOpen } from './panel-state.ts'
@@ -108,6 +112,7 @@ export function apply(ctx: Context): void {
   registerSidePanel(ctx)
   registerExplorerToggles(ctx)
   registerOpenEditorLauncher(ctx)
+  registerRecycleBin(ctx)
 }
 
 /**
@@ -529,7 +534,7 @@ function registerUserEditBubbles(ctx: Context): void {
   trySlot('user message edit bubble', () => {
     ctx.inject(['slots', 'sessions', 'workspaces'], (scope: Context) => {
       const sessions = scope.sessions as unknown as ISessions
-      const workspaces = scope.workspaces as unknown as { connectWorkspace(workspaceId: string): Promise<string> }
+      const workspaces = scope.workspaces as unknown as { connectWorkspace(workspaceId: string): Promise<string>; archiveSession(sessionId: string): Promise<void> }
       scope.slots.inject('conversation.chat.node', () => scope.slots.register({
         name: 'conversation.chat.node',
         key: 'user',
@@ -565,7 +570,7 @@ function registerTurnChangesCards(ctx: Context): void {
   trySlot('turn changes card', () => {
     ctx.inject(['slots', 'sessions', 'workspaces'], (scope: Context) => {
       const sessions = scope.sessions as unknown as ISessions
-      const workspaces = scope.workspaces as unknown as { connectWorkspace(workspaceId: string): Promise<string> }
+      const workspaces = scope.workspaces as unknown as { connectWorkspace(workspaceId: string): Promise<string>; archiveSession(sessionId: string): Promise<void> }
       // Module-level cache for the last valid turn per sessionId, so transient
       // undefined turn values during navigation don't unmount the card.
       const lastTurn = new Map<string, { turn: number; status: 'open' | 'closed' | 'unknown' }>()
@@ -583,18 +588,23 @@ function registerTurnChangesCards(ctx: Context): void {
         // the slot — when the turn resolves, the host card stays and this one
         // never re-mounts. Caching the last good value keeps the card mounted.
         select: (owner) => {
-          const sessionId = String(owner.sessionId ?? '')
+          // The tail's owner share is `{ turn, seq, openFile }` — no sessionId,
+          // and a chain selector must stay a pure function of the owner. The
+          // closing assistant's `seq` is the turn's stable identity, so it is
+          // the cache key: the same turn re-rendering with a transient undefined
+          // boundary hits its prior value and keeps the card mounted.
+          const key = String(owner.seq)
           const turn = owner.turn?.turn
           const status = owner.turn?.status
           if (Number.isSafeInteger(turn) && status !== undefined) {
             const value = { turn, status }
-            lastTurn.set(sessionId, value)
+            lastTurn.set(key, value)
             return value
           }
           // Turn is temporarily undefined — return the last known value for
-          // this session to keep the card mounted, or null if this is the
+          // this turn to keep the card mounted, or null if this is the
           // first paint and we have nothing cached yet.
-          return lastTurn.get(sessionId) ?? null
+          return lastTurn.get(key) ?? null
         },
         // The tail is an ELECT-ONE chain: entries are tried in ascending
         // priority and the first non-null select wins — this is not additive.
@@ -880,6 +890,68 @@ function registerOpenEditorLauncher(ctx: Context): void {
             // Keyed by a per-show sequence: re-showing restarts the fade.
             <Toast key={failure.seq} text={failure.text} onDone={() => { setFailure(undefined) }} />
           )}
+        </>
+      )
+    }))
+  })
+}
+
+/**
+ * The sidebar-foot recycle-bin entry.
+ *
+ * Session admin keeps a restorable trash, but its list lived only inside the
+ * settings page's 会话 tab — invisible to a user who deletes or undoes a session
+ * from the chat. The sidebar's search/session-list region is a single host
+ * component with no plugin hole (confirmed against the host slot contract), so
+ * the closest injectable, list-capable seat is `sidebar.footer.action`, beside
+ * Settings. That is where the bin lives: one click from the session list, and
+ * it opens the trash modal.
+ */
+function registerRecycleBin(ctx: Context): void {
+  trySlot('recycle bin', () => {
+    ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+      name: 'sidebar.footer.action',
+      id: 'dsh-dev-tool-ext-trash',
+      order: 0,
+      registrant: 'dsh-dev-tool-ext',
+    }, function DevToolRecycleBin(props: { wide: boolean }) {
+      const t = useT()
+      const config = useClientConfig()
+      const [open, setOpen] = useState(false)
+      if (config?.sessionAdmin.enabled !== true) return null
+      // Matches the Settings trigger row beside it: wide shows icon + label,
+      // the collapsed rail shows only the icon, centred.
+      return (
+        <>
+          <button
+            type="button"
+            aria-label={t('sessions.trashButton')}
+            title={t('sessions.trashButton')}
+            onClick={() => { setOpen(true) }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: props.wide ? 'flex-start' : 'center',
+              gap: 8,
+              width: props.wide ? '100%' : 44,
+              height: 34,
+              padding: props.wide ? '0 10px' : 0,
+              border: 'none',
+              borderRadius: 8,
+              background: 'transparent',
+              color: 'var(--dsw-alias-label-secondary, currentColor)',
+              cursor: 'pointer',
+              fontSize: 12,
+              whiteSpace: 'nowrap',
+              flex: '0 0 auto',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,0.08))' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+          >
+            <TrashIcon size={16} />
+            {props.wide && <span>{t('sessions.trashButton')}</span>}
+          </button>
+          <TrashModal open={open} onClose={() => { setOpen(false) }} />
         </>
       )
     }))

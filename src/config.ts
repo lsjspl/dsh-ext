@@ -77,7 +77,6 @@ export interface ExplorerConfig {
 
 export interface SessionAdminConfig {
   enabled: boolean
-  trashEnabled: boolean
   attachmentGc: boolean
 }
 
@@ -231,8 +230,7 @@ export const Config: z<Config> = z.object({
   }),
 
   sessionAdmin: z.object({
-    enabled: z.boolean().default(true).description('Delete session records, with a restorable trash.'),
-    trashEnabled: z.boolean().default(true).description('Move deleted sessions to trash instead of removing them immediately.'),
+    enabled: z.boolean().default(true).description('Surface the recycle bin and let undo/edit archive the original session.'),
     attachmentGc: z.boolean().default(false).description('On permanent delete, remove attachment blobs no remaining session references. Scans every session log, so it is off by default.'),
   }),
 

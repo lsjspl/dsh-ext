@@ -139,12 +139,22 @@ export interface SessionRow {
   readonly workspace?: string
 }
 
+/**
+ * One archived session, as the recycle bin lists it. Archived sessions are the
+ * host's own archive set: they are hidden from the sidebar but still on disk.
+ */
 export interface TrashRow {
   readonly id: string
-  readonly sessionId: string
   readonly title: string
-  readonly deletedAt: number
+  /**
+   * The session's last activity. The host records no archival timestamp in
+   * `workspace.json`, so this uses the artifact's mtime rather than inventing
+   * one; it is enough to order the bin rows by recency.
+   */
+  readonly updatedAt: number
   readonly sizeBytes: number
+  /** The workspace the session was open in, when the backend can say. */
+  readonly workspace?: string
 }
 
 // ── Plugin safety ──────────────────────────────────────────────────────────

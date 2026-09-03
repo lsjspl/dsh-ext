@@ -58,6 +58,37 @@ function dirOf(path: string): string {
   return slash < 0 ? '' : path.slice(0, slash + 1)
 }
 
+/**
+ * Compare two workspace paths as the same project regardless of casing or a
+ * trailing separator. Windows and the host's workspace registry can render the
+ * same folder as `C:\proj`, `c:\proj\`, or `C:/proj`; the first-turn undo
+ * fallback uses this only to match a path to a registered workspace id, so a
+ * loose comparison is the safe direction (it never matches two DIFFERENT
+ * projects, only the same one written differently).
+ */
+function normalizeWorkspacePath(path: string | undefined): string {
+  if (path === undefined) return ''
+  return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+/**
+ * Archive a session into the bin by marking it with the host's own archive set.
+ * This is how undo/edit removes the original session from the sidebar: the host
+ * hides it from grouping surfaces but keeps its log, and the recycle bin lists
+ * it. Best-effort — returns false when the feature is off or the call fails, so
+ * a first-turn undo still succeeds (the fresh session is already open) and
+ * simply leaves the original in place.
+ */
+async function trashSession(sessionId: string, archive: (id: string) => Promise<unknown>): Promise<boolean> {
+  try {
+    await archive(sessionId)
+    return true
+  } catch (error: unknown) {
+    console.warn('[dsh-dev-tool-ext] archiving the original session failed:', error)
+    return false
+  }
+}
+
 function nameOf(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1)
 }
@@ -100,8 +131,8 @@ export function TurnChangesCard(props: {
   status: 'open' | 'closed' | 'unknown'
   /** Workspace rows from the host's global feed, for the first-turn fallback. */
   workspaceItems?: readonly { workspaceId: string; path: string }[]
-  /** The host's workspaces service, for the first-turn fresh-session fallback. */
-  workspaces?: { connectWorkspace(workspaceId: string): Promise<string> }
+  /** The host's workspaces service, for the first-turn fresh-session fallback and the undo archive. */
+  workspaces?: { connectWorkspace(workspaceId: string): Promise<string>; archiveSession(sessionId: string): Promise<void> }
   /** True while the plugin config is still loading; renders the placeholder only. */
   disabled?: boolean
   sessions?: ISessions
@@ -167,11 +198,17 @@ export function TurnChangesCard(props: {
 
   // The buttons wait only on facts the client already has. Whether this turn
   // CAN be cut (a previous turn/end exists in the durable log) is learned from
-  // the dialog's detail read — a disabled button can never trigger that read,
-  // so the check happens inside the dialog instead of gating the button.
+  // the dialog's detail read. The rewind engine handles the session's FIRST
+  // turn specially: with no earlier boundary to cut at it restores the files
+  // and opens a fresh session on the same workspace (see rewindTurn), so the
+  // first turn is NOT uncuttable — its undo must stay clickable, not disabled.
   const running = props.status === 'open'
   const detailReady = detail.data !== undefined
-  const uncuttable = detailReady && detail.data?.undoAnchorSeq === undefined
+  // Only truly blocked when we cannot rewind at all: no sessions service, or
+  // the detail read failed so we have no undo anchor to reason about. A first
+  // turn (undoAnchorSeq undefined) is allowed through to the fallback path.
+  const canRewind = props.sessions !== undefined && detailReady
+  const firstTurn = detail.data !== undefined && detail.data.undoAnchorSeq === undefined
   const actionable = !running && props.sessions !== undefined
 
   /** Open a workspace-relative path in the side panel, revealing it if closed. */
@@ -218,7 +255,15 @@ export function TurnChangesCard(props: {
       forkFailedText: message => t('cp.forkFailed', { message }),
       firstTurnText: t('turn.firstTurnNoFork'),
       workspace: data.workspace,
-      workspaceIdOf: path => workspaceItems?.find(item => item.path === path)?.workspaceId,
+      // The backend's workspace path and the host's registered workspace path
+      // can differ in casing or a trailing separator even when they are the
+      // same project. Match loosely (case-insensitive, ignore a trailing slash)
+      // so the first-turn fallback finds the id it needs to open a fresh
+      // session; exact-match-only used to leave it undefined and fail the undo.
+      workspaceIdOf: (path) => {
+        const target = normalizeWorkspacePath(path)
+        return workspaceItems?.find(item => normalizeWorkspacePath(item.path) === target)?.workspaceId
+      },
     })
     return result
   }
@@ -228,8 +273,27 @@ export function TurnChangesCard(props: {
     setError(undefined)
     const result = await rewind()
     setBusy(false)
-    if (!result.ok) setError(result.message)
-    else setDialog('none')
+    if (!result.ok) { setError(result.message); return }
+    // After any successful undo the user is now in a branch (a fork for a
+    // normal turn, a fresh session for the first turn). The original session's
+    // remaining history was carried into that branch, so the original is no
+    // longer needed — archive it into the host's archive set (hidden from the
+    // sidebar, listed in the recycle bin), whether this was a fork or a
+    // first-turn fresh start. Best-effort: a disabled session admin feature
+    // must not make the undo itself fail. Archiving happens AFTER the new
+    // session is live so a failed archive only leaves the original in the
+    // list, never strands the user without a session.
+    const trashed = await trashSession(props.sessionId, async (id) => { await props.workspaces?.archiveSession(id as never) })
+    // Archiving marks the session in the host's archive set; the host refreshes
+    // its list baseline on the next reconnect. The narrow ISessions face hides
+    // refresh; call it only if the runtime object actually has it (a fallback
+    // that silently keeps the stale list is still better than crashing).
+    if (trashed) {
+      const sessionsRef = props.sessions as unknown as { refresh?: () => Promise<void> }
+      await sessionsRef.refresh?.().catch(() => {})
+    }
+    if (!trashed) setFailure({ text: t('turn.trashFailed'), seq: Date.now() })
+    setDialog('none')
   }
 
   const openUndo = () => {
@@ -402,7 +466,7 @@ export function TurnChangesCard(props: {
               </button>
               <button
                 type="button"
-                disabled={busy || !detailReady || uncuttable}
+                disabled={busy || !canRewind}
                 onClick={() => { void undo() }}
                 style={{ ...buttonStyle, borderColor: token.danger, color: token.danger }}
               >
@@ -422,7 +486,7 @@ export function TurnChangesCard(props: {
               <Notice kind="error">{t('cp.unprotected', { n: preview.data.unprotected.length })}</Notice>
             )}
             {detail.error !== undefined && <Notice kind="error">{detail.error}</Notice>}
-            {uncuttable && <Notice kind="error">{t('turn.firstTurnNoFork')}</Notice>}
+            {firstTurn && <Notice kind="info">{t('turn.firstTurnUndo')}</Notice>}
             {error !== undefined && <Notice kind="error">{error}</Notice>}
           </div>
         </Modal>

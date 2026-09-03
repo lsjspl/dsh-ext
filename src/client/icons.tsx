@@ -280,3 +280,19 @@ export function ShieldCheckIcon(props: IconProps) {
     </svg>
   )
 }
+
+/**
+ * A recycle bin — the session-header entry that opens the trash. The lid and
+ * the can, drawn at the same weight as the frame's own small icon buttons.
+ */
+export function TrashIcon(props: IconProps) {
+  const size = props.size ?? 16
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2.5 4.2H13.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M5.6 4.2V3.2C5.6 2.7 6.1 2.2 6.7 2.2H9.3C9.9 2.2 10.4 2.7 10.4 3.2V4.2" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <path d="M3.4 4.2L4.1 13.1C4.15 13.7 4.7 14.1 5.3 14.1H10.7C11.3 14.1 11.85 13.7 11.9 13.1L12.6 4.2" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <path d="M6.8 6.7V11.6M9.2 6.7V11.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}

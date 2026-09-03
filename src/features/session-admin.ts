@@ -1,46 +1,75 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-workspace'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { SessionHeader } from '@deepseek-ai/dsh-session/types'
-import { mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
-import { basename, join } from 'node:path'
-import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
+import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
+import { rm, stat } from 'node:fs/promises'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
 import type { Config } from '../config.ts'
 import type { SessionRow, TrashRow } from '../shared/api-contract.ts'
 
 /**
- * Feature 6 — delete session records, with a trash you can restore from.
+ * Feature 6 — session records and the recycle bin, backed by the host's own
+ * archive set.
  *
- * The persistence seam is append-only by design: it has no `delete`. What it
- * does expose is `locate()`, the backend's own absolute path for one session's
- * artifact. Deleting is therefore a filesystem operation on that exact path,
- * and it is deliberately conservative:
+ * The persistence seam is append-only by design: it has no `delete`. But the
+ * harness DOES own a durable archive set — `WorkspaceRegistry.archivedSessionIds`
+ * (durable in `~/.dsh/storages/workspace.json` under `global.archivedSessionIds`).
+ * That set is what this feature surfaces:
  *
- *   - a delete moves the artifact into this plugin's own trash directory, so
- *     the default is recoverable rather than final;
- *   - a permanent delete removes only paths the backend itself named;
- *   - a restore refuses to overwrite an artifact that came back on its own.
+ *   - archiving (hiding a session from the sidebar) is the host's own
+ *     `archiveSession`, which the chat's undo/edit call; it never moves a file;
+ *   - the recycle bin lists the sessions that are archived but still on disk;
+ *   - 还原 removes an id from the archive set so the session reappears;
+ *   - 永久删除 physically deletes the session artifact, then removes the id.
  *
- * The harness keeps its session list in memory, so a deleted session may stay
- * on screen until the next reload. The response says so rather than pretending
- * the list refreshed.
+ * The host has no public unarchive API (only append-only `archiveSession`), so
+ * this feature goes through the registry's internal `requireState`/`setState`
+ * pair directly. `WorkspaceRegistry` keeps the durable global in memory and only
+ * re-reads it at boot, so rewriting the file alone would leave the sidebar stale
+ * until a restart. Touching the in-memory state (via `setState`, which also
+ * persists) makes a 还原 take effect immediately.
+ *
+ * ORDER CONTRACT — do not reorder. The archive set is an independent membership
+ * set, NOT an ordering of the session list. A session's position in the sidebar
+ * comes from its workspace record's `sessionIds` array, which is untouched by
+ * archiving: an archived session keeps its slot, so unarchiving restores it to
+ * exactly the place it had. These handlers therefore only add/remove ids from
+ * `archivedSessionIds` and never rewrite `sessionIds`/`workspaceIds`/records —
+ * putting a session back would be both wrong and destructive.
  */
 
-/** One trash entry's sidecar, written beside the artifact it describes. */
-interface TrashManifest {
-  readonly sessionId: string
-  readonly title: string
-  readonly deletedAt: number
-  /** Where the artifact came from, so a restore needs no guessing. */
-  readonly originalPath: string
-  readonly artifactName: string
-}
-
-const MANIFEST_NAME = 'manifest.json'
 /** Only this much of a log is scanned for a title: it is a display nicety. */
 const TITLE_SCAN_BYTES = 256 * 1024
 /** How many session logs one listing will decompress; the rest fall back to a date. */
 const TITLE_BUDGET = 60
+
+/**
+ * The host registry's internal write surface. `requireState` and `setState` are
+ * declared `private` on `WorkspaceRegistry` (a compile-time shield only — they
+ * exist at runtime), which is precisely what lets this feature mutate the
+ * durable archive set the host otherwise never exposes for writing. The
+ * private members are reached by structural type; nothing else about the
+ * registry is assumed.
+ */
+interface RegistryStateSurface {
+  archivedSessionIds: readonly string[]
+}
+
+interface RegistryInternal extends RegistryStateSurface {
+  /** The current durable global state (initialized, workspaceIds, pendingMutation, …). */
+  requireState(): WorkspaceDomainInternal
+  /** Persist and install a new full state. Both memory and disk. */
+  setState(state: WorkspaceDomainInternal): Promise<void>
+}
+
+/** The durable global shape, structural; the registry validates via zod at its own boundary. */
+interface WorkspaceDomainInternal {
+  initialized: boolean
+  workspaceIds: readonly string[]
+  archivedSessionIds: readonly string[]
+  pendingMutation?: unknown
+}
 
 /**
  * Recover a session's display title from its log.
@@ -157,42 +186,6 @@ async function readRow(
 /** The backend's raw-artifact reader, narrowed to what this feature calls. */
 type RawReader = (id: SessionHeader['id'], signal?: AbortSignal) => Promise<{ content?: unknown } | undefined>
 
-async function readTrash(trashRoot: string): Promise<TrashRow[]> {
-  let entries: string[]
-  try {
-    entries = await readdir(trashRoot)
-  } catch {
-    return []
-  }
-  const rows: TrashRow[] = []
-  for (const id of entries) {
-    try {
-      const manifest = JSON.parse(await readFile(join(trashRoot, id, MANIFEST_NAME), 'utf8')) as TrashManifest
-      let sizeBytes = 0
-      try {
-        sizeBytes = (await stat(join(trashRoot, id, manifest.artifactName))).size
-      } catch { /* an entry whose artifact is gone still lists, and still deletes */ }
-      rows.push({
-        id,
-        sessionId: manifest.sessionId,
-        title: manifest.title,
-        deletedAt: manifest.deletedAt,
-        sizeBytes,
-      })
-    } catch { /* a directory that is not one of ours is ignored */ }
-  }
-  rows.sort((a, b) => b.deletedAt - a.deletedAt)
-  return rows
-}
-
-/** Trash entry ids are minted here, so a client-supplied one is validated hard. */
-function assertTrashId(id: unknown): string {
-  if (typeof id !== 'string' || !/^[0-9a-z-]{1,80}$/i.test(id)) {
-    throw new ApiError(400, 'not a valid trash entry id')
-  }
-  return id
-}
-
 function requireString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new ApiError(400, `${field} is required`)
@@ -204,15 +197,73 @@ export function mountSessionAdmin(
   ctx: Context,
   config: () => Config,
   routes: Record<string, ApiHandler>,
-  trashRoot: string,
 ): () => void {
   const log = ctx.logger('dsh-dev-tool-ext')
+
+  /**
+   * The live registry, narrowed to the archive-set surface this feature needs.
+   * `ctx.workspaceRegistry` is the host's long-lived registry; its memory is
+   * authoritative, so reads below are always current and never require a reload.
+   */
+  function registry(): RegistryInternal {
+    const reg = ctx.get('workspaceRegistry') as unknown as RegistryInternal | undefined
+    if (reg === undefined) throw new ApiError(409, 'the workspace registry is not mounted')
+    return reg
+  }
 
   async function findSession(sessionId: string, signal: AbortSignal): Promise<LocatedSession> {
     const sessions = await locateSessions(ctx, signal)
     const found = sessions.find(row => String(row.header.id) === sessionId)
     if (found === undefined) throw new ApiError(404, 'no such session')
     return found
+  }
+
+  /** The backend's raw-artifact reader for a live listing, when it exposes one. */
+  function liveReader(): RawReader | undefined {
+    const persistence = ctx.get('sessionPersistence')
+    return persistence?.supportsRawArtifacts === true
+      ? ((id, signal) => persistence.readRaw(id, signal)) as RawReader
+      : undefined
+  }
+
+  /**
+   * Remove an id from the archive set, atomically, WITHOUT touching anything
+   * else. Reads the current full state, replaces only `archivedSessionIds`,
+   * and writes it back through `setState` (memory + disk). The session's
+   * position lives in its workspace record's `sessionIds`, which is never
+   * altered here — so the session returns to exactly where it was.
+   */
+  async function removeFromArchive(sessionId: string): Promise<void> {
+    const reg = registry()
+    const state = reg.requireState()
+    const next = state.archivedSessionIds.filter(id => id !== sessionId)
+    if (next.length === state.archivedSessionIds.length) return // already absent: no-op
+    await reg.setState({ ...state, archivedSessionIds: next })
+  }
+
+  /**
+   * The archived rows: every id in the host's archive set that still has a file
+   * on disk. Read newest-first up to the title budget, so a long archive stays
+   * cheap to open. `located` is the live listing the caller already fetched, so
+   * this does not repeat the persistence scan.
+   */
+  async function readArchivedRows(located: LocatedSession[], signal: AbortSignal): Promise<TrashRow[]> {
+    const ids = new Set<string>(registry().archivedSessionIds.map(String))
+    if (ids.size === 0) return []
+    const reader = liveReader()
+    const matches = located.filter(row => ids.has(String(row.header.id)))
+    matches.sort((a, b) => b.header.createdAt - a.header.createdAt)
+    const rows = (await Promise.all(matches.map((row, index) => (
+      readRow(row, reader, index < TITLE_BUDGET, signal)
+    )))).filter((row): row is SessionRow => row !== undefined)
+    rows.sort((a, b) => b.updatedAt - a.updatedAt)
+    return rows.map(row => ({
+      id: row.id,
+      title: row.title,
+      updatedAt: row.updatedAt,
+      sizeBytes: row.sizeBytes,
+      workspace: row.workspace,
+    }))
   }
 
   return installRoutes(routes, {
@@ -226,126 +277,56 @@ export function mountSessionAdmin(
       // up to a budget: a history of hundreds should not spend hundreds of
       // decompressions to label rows further down than anyone scrolls.
       located.sort((a, b) => b.header.createdAt - a.header.createdAt)
-      const persistence = ctx.get('sessionPersistence')
-      const reader = persistence?.supportsRawArtifacts === true
-        ? ((id, signal) => persistence.readRaw(id, signal)) as RawReader
-        : undefined
+      const reader = liveReader()
 
       const rows = (await Promise.all(located.map((row, index) => (
         readRow(row, reader, index < TITLE_BUDGET, controller.signal)
       )))).filter((row): row is SessionRow => row !== undefined)
       rows.sort((a, b) => b.updatedAt - a.updatedAt)
-      return { sessions: rows, trash: await readTrash(trashRoot), titleBudget: TITLE_BUDGET }
-    },
-
-    '/sessions/delete': async ({ body, method, req }) => {
-      if (method !== 'POST') throw new ApiError(405, 'use POST to delete a session')
-      const settings = config().sessionAdmin
-      if (!settings.enabled) throw new ApiError(404, 'session administration is switched off')
-
-      const sessionId = requireString((body as { sessionId?: unknown } | undefined)?.sessionId, 'sessionId')
-      const controller = new AbortController()
-      req.on('close', () => { controller.abort() })
-      const located = await findSession(sessionId, controller.signal)
-      // The title is read here even though the listing may have skipped it past
-      // its budget: the trash entry keeps it forever, and "Session of <date>" is
-      // a poor label to have to recognize something by weeks later.
-      const persistence = ctx.get('sessionPersistence')
-      const reader = persistence?.supportsRawArtifacts === true
-        ? ((id, signal) => persistence.readRaw(id, signal)) as RawReader
-        : undefined
-      const row = await readRow(located, reader, true, controller.signal)
-
-      if (!settings.trashEnabled) {
-        await rm(located.path, { force: true })
-        log.info('permanently deleted session %s', sessionId)
-        return { deleted: sessionId, recoverable: false, reloadRequired: true }
-      }
-
-      const entryId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-      const entryDir = join(trashRoot, entryId)
-      const artifactName = basename(located.path)
-      await mkdir(entryDir, { recursive: true, mode: 0o700 })
-
-      const manifest: TrashManifest = {
-        sessionId,
-        title: row?.title ?? `Session ${sessionId}`,
-        deletedAt: Date.now(),
-        originalPath: located.path,
-        artifactName,
-      }
-      // Manifest first: an entry whose artifact moved but whose manifest is
-      // missing would be unrestorable, while a manifest with no artifact is
-      // merely an empty entry the user can discard.
-      await writeFileAtomic(join(entryDir, MANIFEST_NAME), JSON.stringify(manifest, null, 2), { mode: 0o600, dirMode: 0o700 })
-      try {
-        await rename(located.path, join(entryDir, artifactName))
-      } catch (error: unknown) {
-        // A cross-device rename cannot work; copy then unlink is the fallback.
-        if ((error as { code?: string }).code === 'EXDEV') {
-          await writeFileAtomic(join(entryDir, artifactName), await readFile(located.path, 'utf8'), { mode: 0o600, dirMode: 0o700 })
-          await rm(located.path, { force: true })
-        } else {
-          await rm(entryDir, { recursive: true, force: true })
-          throw new ApiError(500, 'could not move that session into the trash')
-        }
-      }
-      log.info('moved session %s to trash entry %s', sessionId, entryId)
-      return { deleted: sessionId, recoverable: true, trashId: entryId, reloadRequired: true }
+      return { sessions: rows, trash: await readArchivedRows(located, controller.signal), titleBudget: TITLE_BUDGET }
     },
 
     '/sessions/restore': async ({ body, method }) => {
       if (method !== 'POST') throw new ApiError(405, 'use POST to restore a session')
       if (!config().sessionAdmin.enabled) throw new ApiError(404, 'session administration is switched off')
-      const entryId = assertTrashId((body as { trashId?: unknown } | undefined)?.trashId)
-      const entryDir = join(trashRoot, entryId)
-
-      let manifest: TrashManifest
-      try {
-        manifest = JSON.parse(await readFile(join(entryDir, MANIFEST_NAME), 'utf8')) as TrashManifest
-      } catch {
-        throw new ApiError(404, 'no such trash entry')
-      }
-
-      // Refuse rather than overwrite: the session coming back on its own means
-      // the log at that path is not ours to replace.
-      try {
-        await stat(manifest.originalPath)
-        throw new ApiError(409, 'a session log already exists at the original path; not overwriting it')
-      } catch (error: unknown) {
-        if (error instanceof ApiError) throw error
-      }
-
-      const source = join(entryDir, manifest.artifactName)
-      try {
-        await mkdir(join(manifest.originalPath, '..'), { recursive: true })
-        await rename(source, manifest.originalPath)
-      } catch (error: unknown) {
-        if ((error as { code?: string }).code === 'EXDEV') {
-          await writeFileAtomic(manifest.originalPath, await readFile(source, 'utf8'), { mode: 0o600 })
-          await rm(source, { force: true })
-        } else {
-          throw new ApiError(500, 'could not restore that session log')
-        }
-      }
-      await rm(entryDir, { recursive: true, force: true })
-      log.info('restored session %s from trash', manifest.sessionId)
-      return { restored: manifest.sessionId, reloadRequired: true }
+      const sessionId = requireString((body as { sessionId?: unknown } | undefined)?.sessionId, 'sessionId')
+      await removeFromArchive(sessionId)
+      log.info('restored session %s', sessionId)
+      // The registry memory is updated in place, so the sidebar reflects the
+      // restored session immediately — no reload required.
+      return { restored: sessionId, reloadRequired: false }
     },
 
-    '/sessions/trash/purge': async ({ body, method }) => {
-      if (method !== 'POST') throw new ApiError(405, 'use POST to purge trash')
+    '/sessions/purge': async ({ body, method, req }) => {
+      if (method !== 'POST') throw new ApiError(405, 'use POST to purge a session')
       if (!config().sessionAdmin.enabled) throw new ApiError(404, 'session administration is switched off')
-      const request = body as { trashId?: unknown; all?: unknown } | undefined
+      const request = body as { sessionId?: unknown; all?: unknown } | undefined
+      const controller = new AbortController()
+      req.on('close', () => { controller.abort() })
 
+      const reg = registry()
+      const archived = reg.archivedSessionIds.map(String)
+      let targets: string[]
       if (request?.all === true) {
-        const rows = await readTrash(trashRoot)
-        for (const row of rows) await rm(join(trashRoot, row.id), { recursive: true, force: true })
-        return { purged: rows.length }
+        targets = [...archived]
+      } else {
+        targets = [requireString(request?.sessionId, 'sessionId')]
       }
-      const entryId = assertTrashId(request?.trashId)
-      await rm(join(trashRoot, entryId), { recursive: true, force: true })
-      return { purged: 1 }
+
+      // Delete the artifacts first (only id-nameable sessions), then drop the ids
+      // from the archive set in one write. A session whose file is already gone
+      // still gets its id removed, so a stale archive entry cannot linger.
+      const located = await locateSessions(ctx, controller.signal)
+      for (const target of targets) {
+        if (!archived.includes(target)) continue
+        const match = located.find(row => String(row.header.id) === target)
+        if (match !== undefined) await rm(match.path, { force: true })
+      }
+
+      const state = reg.requireState()
+      await reg.setState({ ...state, archivedSessionIds: state.archivedSessionIds.filter(id => !targets.includes(String(id))) })
+      log.info('purged %d archived session(s)', targets.length)
+      return { purged: targets.length, reloadRequired: false }
     },
   })
 }

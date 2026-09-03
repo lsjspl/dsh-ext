@@ -86,8 +86,8 @@ export function UserEditBubble(props: {
   node: { seq: number; time: number; content: readonly unknown[] }
   /** The framework's global workspace feed; enables the first-turn fallback. */
   useWorkspaces?: <T>(select: (state: { items: readonly { workspaceId: string; path: string }[] }) => T) => T
-  /** The host's workspaces service, for the first-turn fresh-session fallback. */
-  workspaces?: { connectWorkspace(workspaceId: string): Promise<string> }
+  /** The host's workspaces service, for the first-turn fresh-session fallback and the undo archive. */
+  workspaces?: { connectWorkspace(workspaceId: string): Promise<string>; archiveSession(sessionId: string): Promise<void> }
 }) {
   const t = useT()
   const [editing, setEditing] = useState(false)
@@ -154,7 +154,18 @@ export function UserEditBubble(props: {
     const sent = await resendEditedQuestion(props.sessions, result.childId, value)
     setBusy(false)
     if (!sent.ok) setError(t('turn.editSendFailed', { message: sent.message }))
-    else setEditing(false)
+    else {
+      // The original session's history was carried into the new branch, so it is
+      // no longer needed — archive it into the host's archive set (hidden from
+      // the sidebar, listed in the recycle bin). Best-effort: a failed archive
+      // only leaves the original in the list, never fails the re-answer.
+      try {
+        await props.workspaces?.archiveSession(props.sessionId as never)
+      } catch (archiveError: unknown) {
+        console.warn('[dsh-dev-tool-ext] archiving the original session after edit failed:', archiveError)
+      }
+      setEditing(false)
+    }
   }
 
   if (editing) {

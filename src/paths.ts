@@ -6,8 +6,6 @@ import { join } from 'node:path'
 export interface PluginPaths {
   /** `$DSH_HOME/dsh-dev-tool-ext`. */
   readonly root: string
-  /** Deleted session artifacts awaiting restore or permanent removal. */
-  readonly trash: string
   /** Shadow git repositories, one per workspace root. */
   readonly checkpoints: string
   /** Command-review verdict log. */
@@ -20,7 +18,6 @@ export function pluginPaths(): PluginPaths {
   const root = dshHomePath('dsh-dev-tool-ext')
   return {
     root,
-    trash: join(root, 'trash'),
     checkpoints: join(root, 'checkpoints'),
     auditLog: join(root, 'command-review.jsonl'),
     quarantine: join(root, 'quarantine.json'),

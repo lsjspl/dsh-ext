@@ -75,7 +75,7 @@ export function apply(ctx: Context, entry: Config): void {
     {
       id: 'sessionAdmin',
       enabled: config => config.sessionAdmin.enabled,
-      mount: () => mountSessionAdmin(ctx, settings.current, routes, paths.trash),
+      mount: () => mountSessionAdmin(ctx, settings.current, routes),
     },
     {
       id: 'pluginSafety',

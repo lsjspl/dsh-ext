@@ -4,7 +4,6 @@ import { useResource } from './use-resource.ts'
 import { useConfig } from './use-config.ts'
 import { BalanceCard } from './BalanceView.tsx'
 import { AuditPanel } from './AuditPanel.tsx'
-import { SessionsPanel } from './SessionsPanel.tsx'
 import { PluginsPanel } from './PluginsPanel.tsx'
 import { EffortsPanel } from './EffortsPanel.tsx'
 import { CheckpointsPanel } from './CheckpointsPanel.tsx'
@@ -412,28 +411,6 @@ export function SettingsPage() {
 
         {tab === 'sessions' && (
           <>
-            <Section
-              title={t('section.sessions')}
-              description={t('section.sessions.desc')}
-              action={<Toggle label={t('section.sessions')} checked={c.sessionAdmin.enabled} disabled={disabled}
-                onChange={next => { set(['sessionAdmin', 'enabled'], next) }} />}
-            >
-              <Row
-                label={t('sessions.trash')} hint={t('sessions.trash.hint')}
-                control={<Toggle label={t('sessions.trash')} checked={c.sessionAdmin.trashEnabled} disabled={disabled || !c.sessionAdmin.enabled}
-                  onChange={next => { set(['sessionAdmin', 'trashEnabled'], next) }} />}
-              />
-              <Row
-                label={t('sessions.gc')}
-                hint={t('sessions.gc.hint')}
-                control={<Toggle label={t('sessions.gc')} checked={c.sessionAdmin.attachmentGc} disabled={disabled || !c.sessionAdmin.enabled}
-                  onChange={next => { set(['sessionAdmin', 'attachmentGc'], next) }} />}
-              />
-              <Disclosure label={t('sessions.stored')}>
-                <SessionsPanel enabled={c.sessionAdmin.enabled} trashEnabled={c.sessionAdmin.trashEnabled} />
-              </Disclosure>
-            </Section>
-
             <Section
               title={t('section.checkpoints')}
               description={t('section.checkpoints.desc')}
