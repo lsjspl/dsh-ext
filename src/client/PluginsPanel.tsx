@@ -62,7 +62,7 @@ export function PluginsPanel(props: { enabled: boolean }) {
               <button
                 type="button"
                 disabled={command.busy}
-                onClick={() => { void command.run('/plugins/quarantine', { row: row.name, quarantined: !row.quarantined }) }}
+                onClick={() => { void command.run('/plugins/quarantine', { name: row.name, row: row.name, quarantined: !row.quarantined }) }}
                 style={{
                   ...buttonStyle,
                   fontSize: 11,

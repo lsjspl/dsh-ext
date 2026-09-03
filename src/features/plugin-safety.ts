@@ -159,9 +159,10 @@ export function mountPluginSafety(
     '/plugins/quarantine': async ({ body, method }) => {
       if (method !== 'POST') throw new ApiError(405, 'use POST to change the quarantine list')
       requireEnabled()
-      const request = body as { name?: unknown; quarantined?: unknown } | undefined
-      if (!isRowId(request?.name)) throw new ApiError(400, 'name must be a plugin package name')
-      const name = request.name
+      const request = body as { name?: unknown; row?: unknown; quarantined?: unknown } | undefined
+      const rawName = request?.name ?? request?.row
+      if (!isRowId(rawName)) throw new ApiError(400, 'name must be a plugin package name')
+      const name = rawName
       if (isBuiltin(name)) {
         // Refusing this is the difference between a rescue tool and a way to
         // break your own harness from its own settings page.
