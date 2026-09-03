@@ -71,8 +71,10 @@ export function Section(props: {
         border: `1px solid ${token.border}`,
         borderRadius: 10,
         overflow: 'hidden',
+        boxSizing: 'border-box',
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
       }}
+
     >
       <div
         data-dsh-part="section-header"
@@ -169,7 +171,7 @@ export function Section(props: {
       <div
         data-dsh-part="section-items"
         style={{
-          padding: '2px 18px 4px',
+          padding: '2px 18px 14px',
           display: 'flex',
           flexDirection: 'column',
           background: 'transparent',
@@ -477,13 +479,15 @@ export function NumberField(props: {
   step?: number
   disabled?: boolean
   label: string
+  suffix?: string
+  width?: number
   onCommit: (next: number) => void
 }) {
   const [draft, setDraft] = useState(String(props.value))
   const [editing, setEditing] = useState(false)
   if (!editing && draft !== String(props.value)) setDraft(String(props.value))
 
-  return (
+  const inputEl = (
     <input
       type="number"
       value={draft}
@@ -511,13 +515,24 @@ export function NumberField(props: {
       }}
       style={{
         ...inputStyle,
-        width: 96,
+        width: props.width ?? (props.suffix ? 84 : 96),
         maxWidth: '100%',
         minWidth: 0,
         boxSizing: 'border-box',
       }}
     />
   )
+
+  if (props.suffix) {
+    return (
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        {inputEl}
+        <span style={{ fontSize: 12, color: token.textMuted, whiteSpace: 'nowrap' }}>{props.suffix}</span>
+      </div>
+    )
+  }
+
+  return inputEl
 }
 
 export function Notice(props: { kind: 'error' | 'info'; children: ReactNode }) {

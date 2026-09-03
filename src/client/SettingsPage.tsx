@@ -217,6 +217,7 @@ export function SettingsPage() {
   const { view, error, busy, set, setMany } = useConfig()
   const [tab, setTab] = useState<Tab>('input')
   const [direction, setDirection] = useState<'right' | 'left'>('right')
+  const [ruleSubTab, setRuleSubTab] = useState<'deny' | 'read' | 'delete'>('deny')
 
   const handleSelectTab = (nextTab: Tab) => {
     if (nextTab === tab) return
@@ -280,7 +281,7 @@ export function SettingsPage() {
 
 
   return (
-    <div style={{ padding: '0 4px 28px', color: token.text }} data-dsh-plugin="dsh-ext">
+    <div style={{ padding: '0 2px 48px', color: token.text }} data-dsh-plugin="dsh-ext">
       {!view.writable && (
         <div style={{ paddingTop: 10 }}>
           <Notice kind="info">
@@ -300,9 +301,8 @@ export function SettingsPage() {
           position: 'sticky',
           top: 0,
           zIndex: 30,
-          background: 'var(--dsw-alias-bg-base, var(--dsw-alias-bg-layer-1, #121214))',
-          margin: '0 -4px',
-          padding: '8px 4px 0',
+          background: 'var(--dsw-alias-bg-layer-2, #2c2c2e)',
+          padding: '8px 0 0',
         }}
       >
         <TabStrip active={tab} onSelect={handleSelectTab} />
@@ -330,7 +330,7 @@ export function SettingsPage() {
           }
         }
       `}</style>
-      <div style={{ overflowX: 'clip', minHeight: 380, paddingTop: 14 }}>
+      <div style={{ overflowX: 'clip', minHeight: 380, paddingTop: 14, paddingLeft: 1, paddingRight: 1 }}>
         <div
           key={tab}
           style={{
@@ -418,6 +418,7 @@ export function SettingsPage() {
                 label={t('balance.poll')}
                 value={c.deepseekBalance.pollSeconds ?? 30}
                 min={0} max={600} step={5}
+                suffix="秒"
                 disabled={disabled || !c.deepseekBalance.enabled}
                 onCommit={next => { set(['deepseekBalance', 'pollSeconds'], next) }} />}
             />
@@ -439,7 +440,7 @@ export function SettingsPage() {
                 onChange={next => { set(['deepseekBalance', 'peakWeekdaysOnly'], next) }} />}
             />
             {c.deepseekBalance.enabled && (
-              <div style={{ paddingTop: 4 }}><BalanceCard enabled /></div>
+              <div style={{ paddingTop: 8, paddingBottom: 6 }}><BalanceCard enabled /></div>
             )}
           </Section>
         )}
@@ -597,6 +598,7 @@ export function SettingsPage() {
                       label={t('review.timeout')}
                       value={c.commandReview.timeoutMs}
                       min={1000} max={120000} step={500}
+                      suffix="毫秒"
                       disabled={disabled || !c.commandReview.enabled}
                       onCommit={next => { set(['commandReview', 'timeoutMs'], next) }} />}
                   />
@@ -648,54 +650,113 @@ export function SettingsPage() {
 
             </Section>
 
-            {/* 3. 高级规则词表与审计记录 */}
+            {/* 3. 自定义正则规则 */}
             <Section
-              title="高级规则与审计记录"
-              description="自定义高危拦截、只读放行与删除特征的正则表达式，并查看历史审核判定记录。"
+              title="自定义正则规则"
+              description="自定义高危拦截、只读放行与绝对删除特征的正则表达式规则词表。"
             >
-              <Disclosure label={t('review.denyPatterns')}>
-                <div style={{ paddingTop: 6, paddingBottom: 6, width: '100%', boxSizing: 'border-box' }}>
-                  <TextAreaField
-                    label={t('review.denyPatterns')}
-                    value={c.commandReview.denyPatterns.join('\n')}
-                    disabled={disabled || !c.commandReview.enabled}
-                    rows={6}
-                    onCommit={next => {
-                      set(['commandReview', 'denyPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
-                    }} />
+              <div style={{ padding: '12px 0 16px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+                  {[
+                    { id: 'deny' as const, label: t('review.denyPatterns') },
+                    { id: 'read' as const, label: t('review.readPatterns') },
+                    { id: 'delete' as const, label: t('review.deletePatterns') },
+                  ].map(tabItem => {
+                    const active = ruleSubTab === tabItem.id
+                    return (
+                      <button
+                        key={tabItem.id}
+                        type="button"
+                        onClick={() => { setRuleSubTab(tabItem.id) }}
+                        style={{
+                          ...buttonStyle,
+                          padding: '6px 14px',
+                          fontSize: 12.5,
+                          borderRadius: 6,
+                          fontWeight: active ? 600 : 400,
+                          border: active
+                            ? '1px solid var(--dsw-alias-state-business-primary, #2563eb)'
+                            : `1px solid ${token.border}`,
+                          background: active
+                            ? 'var(--dsw-alias-state-business-primary, #2563eb)'
+                            : 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))',
+                          color: active ? '#ffffff' : token.text,
+                          transition: 'all 140ms ease',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {tabItem.label}
+                      </button>
+                    )
+                  })}
                 </div>
-              </Disclosure>
-              <Disclosure label={t('review.readPatterns')}>
-                <div style={{ paddingTop: 6, paddingBottom: 6, width: '100%', boxSizing: 'border-box' }}>
-                  <TextAreaField
-                    label={t('review.readPatterns')}
-                    value={(c.commandReview.readPatterns ?? DEFAULT_READ_PATTERNS).join('\n')}
-                    disabled={disabled || !c.commandReview.enabled || !(c.commandReview.writeOnly ?? true)}
-                    rows={5}
-                    onCommit={next => {
-                      set(['commandReview', 'readPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
-                    }} />
-                </div>
-              </Disclosure>
-              <Disclosure label={t('review.deletePatterns')}>
-                <div style={{ paddingTop: 6, paddingBottom: 6, width: '100%', boxSizing: 'border-box' }}>
-                  <TextAreaField
-                    label={t('review.deletePatterns')}
-                    value={(c.commandReview.deletePatterns ?? DEFAULT_DELETE_PATTERNS).join('\n')}
-                    disabled={disabled || !c.commandReview.enabled || !(c.commandReview.absoluteDenyDelete ?? true)}
-                    rows={6}
-                    onCommit={next => {
-                      set(['commandReview', 'deletePatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
-                    }} />
-                </div>
-              </Disclosure>
 
-              <Disclosure label={t('review.verdicts')}>
+                {ruleSubTab === 'deny' && (
+                  <div style={{ width: '100%', boxSizing: 'border-box' }}>
+                    <div style={{ fontSize: 12, color: token.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
+                      每行一条正则表达式。命中此列表特征的命令将被识别为高危操作，进入第二模型深度审核流程。
+                    </div>
+                    <TextAreaField
+                      label={t('review.denyPatterns')}
+                      value={c.commandReview.denyPatterns.join('\n')}
+                      disabled={disabled || !c.commandReview.enabled}
+                      rows={6}
+                      onCommit={next => {
+                        set(['commandReview', 'denyPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                      }}
+                    />
+                  </div>
+                )}
+
+                {ruleSubTab === 'read' && (
+                  <div style={{ width: '100%', boxSizing: 'border-box' }}>
+                    <div style={{ fontSize: 12, color: token.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
+                      每行一条正则表达式。命中此列表特征的命令将被识别为纯只读查询，直接跳过模型审核并放行。
+                    </div>
+                    <TextAreaField
+                      label={t('review.readPatterns')}
+                      value={(c.commandReview.readPatterns ?? DEFAULT_READ_PATTERNS).join('\n')}
+                      disabled={disabled || !c.commandReview.enabled || !(c.commandReview.writeOnly ?? true)}
+                      rows={6}
+                      onCommit={next => {
+                        set(['commandReview', 'readPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                      }}
+                    />
+                  </div>
+                )}
+
+                {ruleSubTab === 'delete' && (
+                  <div style={{ width: '100%', boxSizing: 'border-box' }}>
+                    <div style={{ fontSize: 12, color: token.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
+                      每行一条正则表达式。命中此列表特征的删除操作将直接拒绝执行，彻底阻断破坏性操作。
+                    </div>
+                    <TextAreaField
+                      label={t('review.deletePatterns')}
+                      value={(c.commandReview.deletePatterns ?? DEFAULT_DELETE_PATTERNS).join('\n')}
+                      disabled={disabled || !c.commandReview.enabled || !(c.commandReview.absoluteDenyDelete ?? true)}
+                      rows={6}
+                      onCommit={next => {
+                        set(['commandReview', 'deletePatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            </Section>
+
+            {/* 4. 审核判定记录 */}
+            <Section
+              title={t('review.verdicts')}
+              description="第二审查模型与本地规则对历史工具调用执行审核判定的日志记录与处置理由。"
+            >
+              <div style={{ padding: '6px 0 12px' }}>
                 <AuditPanel enabled={c.commandReview.enabled} />
-              </Disclosure>
+              </div>
             </Section>
           </>
         )}
+
+
 
         {tab === 'files' && (
           <Section
@@ -751,6 +812,7 @@ export function SettingsPage() {
                   label={t('cp.retention')}
                   value={c.checkpoints.retentionDays}
                   min={0} max={3650} step={1}
+                  suffix="天"
                   disabled={disabled || !c.checkpoints.enabled}
                   onCommit={next => { set(['checkpoints', 'retentionDays'], next) }} />}
               />
@@ -760,6 +822,7 @@ export function SettingsPage() {
                   label={t('cp.maxSize')}
                   value={c.checkpoints.maxFileSizeMb}
                   min={1} max={1024} step={1}
+                  suffix="MB"
                   disabled={disabled || !c.checkpoints.enabled}
                   onCommit={next => { set(['checkpoints', 'maxFileSizeMb'], next) }} />}
               />
@@ -791,7 +854,7 @@ export function SettingsPage() {
                 onChange={next => { set(['pluginSafety', 'enabled'], next) }} />}
               onReset={() => { resetSection('pluginSafety') }}
             >
-              <div style={{ paddingTop: 4 }}>
+              <div style={{ paddingTop: 6, paddingBottom: 6 }}>
                 <PluginsPanel enabled={c.pluginSafety.enabled} />
               </div>
             </Section>

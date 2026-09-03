@@ -198,7 +198,7 @@ export const Config: z<Config> = z.object({
   }),
 
   commandReview: z.object({
-    enabled: z.boolean().default(false).description('Have a second model review high-risk tool calls before they run.'),
+    enabled: z.boolean().default(true).description('Have a second model review high-risk tool calls before they run.'),
     mode: z.union([
       z.const('rules-only').description('Screen with local patterns only; never call a model.'),
       z.const('rules+llm').description('Screen locally, then send hits to the reviewer model.'),
@@ -274,7 +274,7 @@ export const DEFAULT_CONFIG: Config = {
     peakWeekdaysOnly: true,
   },
   commandReview: {
-    enabled: false,
+    enabled: true,
     mode: 'rules+llm',
     tools: ['bash', 'pwsh', 'run_command'],
     writeOnly: true,
