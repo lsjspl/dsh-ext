@@ -172,3 +172,29 @@ export function useTabs(scope: string | undefined): TabStore {
 
   return { ...now, open: openBound, select: selectBound, close: closeBound }
 }
+
+// ── The conversation → panel bridge ────────────────────────────────────────
+//
+// The per-turn changes card lives in the host's chat and needs to open a diff
+// or editor tab in THIS panel, which is a different component tree. The store
+// is module-level, so the panel publishes its scope on mount and any caller
+// can open into it. The last bound scope survives the panel being closed
+// (unmounted): a tab written then simply shows when the panel reopens.
+
+let panelScope: string | undefined
+
+/** Publish the mounted panel's tab scope. Returns the unbind disposer. */
+export function bindPanelTabs(scope: string): () => void {
+  panelScope = scope
+  return () => { if (panelScope === scope) panelScope = undefined }
+}
+
+/** The scope the side panel last published, for opening a tab from outside it. */
+export function currentPanelScope(): string | undefined {
+  return panelScope
+}
+
+/** Open a tab in the panel's store directly — works while the panel is closed. */
+export function openPanelTab(scope: string, kind: TabKind, path?: string): void {
+  open(scope, kind, path)
+}

@@ -198,6 +198,11 @@ export type MessageCheckpoint = CheckpointRow
 
 export interface MessageCheckpointView {
   readonly checkpoint: MessageCheckpoint | null
+  /**
+   * The session-log position captured when this checkpoint was taken. Used to
+   * fork the conversation back to this exact moment after the file restore.
+   */
+  readonly anchorSeq?: number
 }
 
 export interface RestorePreview {
@@ -211,6 +216,36 @@ export interface RestorePreview {
    * project's own git — a restore is the only copy that would be lost.
    */
   readonly unprotected: readonly string[]
+}
+
+/** One file a single turn changed, with its line counts. */
+export interface TurnFileChange {
+  readonly path: string
+  readonly added: number
+  readonly removed: number
+}
+
+/**
+ * What one turn did, as the chat's per-turn changes card renders it.
+ *
+ * `checkpointId === undefined` means the turn never mutated a tracked file and
+ * the card renders nothing. `undoAnchorSeq` is the session-log position a chat
+ * fork cuts at to remove this turn and everything after it from the branch;
+ * it is undefined for the session's first turn, which has no earlier boundary.
+ */
+export interface TurnInfoView {
+  readonly turn: number
+  /** False while the turn is still running; actions stay disabled then. */
+  readonly closed: boolean
+  /** The user text that started this turn, for the edit affordance. */
+  readonly question: string | undefined
+  readonly checkpointId: string | undefined
+  readonly undoAnchorSeq: number | undefined
+  /** The workspace the paths are relative to, for the side panel's tab scope. */
+  readonly workspace: string
+  readonly files: readonly TurnFileChange[]
+  readonly added: number
+  readonly removed: number
 }
 
 /**

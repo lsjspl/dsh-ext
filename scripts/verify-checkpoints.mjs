@@ -124,7 +124,7 @@ const storeBundle = join(process.cwd(), 'lib', 'checkpoint-store.verify.mjs')
 const verifyEntry = join(process.cwd(), 'src', 'checkpoints.verify.entry.ts')
 writeFileSync(verifyEntry, [
   "export { CheckpointStore } from './checkpoint-store.ts'",
-  "export { liveSessionCwd, turnForMessageEvents } from './features/checkpoints.ts'",
+  "export { liveSessionCwd, turnForMessageEvents, messagePositionOfEvents, turnContextOfEvents } from './features/checkpoints.ts'",
   "export { DEFAULT_CHECKPOINT_EXCLUDES } from './config.ts'",
 ].join(String.fromCharCode(10)))
 await build({
@@ -136,7 +136,7 @@ await build({
   packages: 'external',
   logLevel: 'error',
 })
-const { CheckpointStore, DEFAULT_CHECKPOINT_EXCLUDES, liveSessionCwd, turnForMessageEvents } = await import(pathToFileURL(storeBundle).href)
+const { CheckpointStore, DEFAULT_CHECKPOINT_EXCLUDES, liveSessionCwd, turnForMessageEvents, messagePositionOfEvents, turnContextOfEvents } = await import(pathToFileURL(storeBundle).href)
 rmSync(verifyEntry, { force: true })
 
 // The excludes and cap the plugin actually ships with, so this exercises the
@@ -153,18 +153,50 @@ process.stdout.write('\n')
 
 process.stdout.write('Message-to-turn mapping:\n')
 const messageEvents = [
-  { type: 'turn/start', data: { turn: 3 } },
-  { type: 'assistant/message', data: { turn: 3, step: 0, message: { id: 'answer-a' } } },
-  { type: 'tool/call', data: { turn: 3, step: 0, callId: 'call-a' } },
-  { type: 'assistant/message', data: { turn: 3, step: 1, message: { id: 'answer-b' } } },
-  { type: 'turn/end', data: { turn: 3 } },
-  { type: 'assistant/message', data: { turn: 4, step: 0, message: { id: 'answer-c' } } },
+  { type: 'turn/start', seq: 10, data: { turn: 3 } },
+  { type: 'assistant/message', seq: 11, data: { turn: 3, step: 0, message: { id: 'answer-a' } } },
+  { type: 'tool/call', seq: 12, data: { turn: 3, step: 0, callId: 'call-a' } },
+  { type: 'assistant/message', seq: 13, data: { turn: 3, step: 1, message: { id: 'answer-b' } } },
+  { type: 'turn/end', seq: 14, data: { turn: 3 } },
+  { type: 'assistant/message', seq: 15, data: { turn: 4, step: 0, message: { id: 'answer-c' } } },
 ]
 report('first assistant step maps to its turn', turnForMessageEvents(messageEvents, 'answer-a') === 3)
 report('closing assistant step maps to the same turn', turnForMessageEvents(messageEvents, 'answer-b') === 3)
 report('a later answer maps to its own turn', turnForMessageEvents(messageEvents, 'answer-c') === 4)
 report('a missing message gets no checkpoint mapping', turnForMessageEvents(messageEvents, 'missing') === undefined)
 report('a tool call id cannot masquerade as a message id', turnForMessageEvents(messageEvents, 'call-a') === undefined)
+// The fork anchor: forking at the answer's own seq cuts at its turn/end, so the
+// branch conversation ends exactly at the rolled-back answer.
+report('the answer event itself carries a fork anchor', messagePositionOfEvents(messageEvents, 'answer-a')?.seq === 11)
+report('the anchor is the answer\'s own log position', messagePositionOfEvents(messageEvents, 'answer-b')?.seq === 13)
+report('a later answer anchors at its own seq', messagePositionOfEvents(messageEvents, 'answer-c')?.seq === 15)
+report('anchor and turn agree for the same message', messagePositionOfEvents(messageEvents, 'answer-b')?.turn === 3)
+report('a missing message has no anchor', messagePositionOfEvents(messageEvents, 'missing') === undefined)
+process.stdout.write('\n')
+
+process.stdout.write('Turn context for the changes card:\n')
+const turnLog = [
+  { type: 'session/start', seq: 0, data: {} },
+  { type: 'turn/start', seq: 1, data: { turn: 1 } },
+  { type: 'user/message', seq: 2, data: { role: 'user', content: [{ type: 'text', text: 'first question' }] } },
+  { type: 'assistant/message', seq: 3, data: { turn: 1, step: 0, message: { id: 'answer-a' } } },
+  { type: 'turn/end', seq: 4, data: { turn: 1 } },
+  { type: 'turn/start', seq: 5, data: { turn: 2 } },
+  { type: 'user/message', seq: 6, data: { role: 'user', content: [{ type: 'text', text: 'second question' }] } },
+  { type: 'assistant/message', seq: 7, data: { turn: 2, step: 0, message: { id: 'answer-b' } } },
+  { type: 'turn/end', seq: 8, data: { turn: 2 } },
+]
+const turnOne = turnContextOfEvents(turnLog, 1)
+const turnTwo = turnContextOfEvents(turnLog, 2)
+const openTurnTwo = turnContextOfEvents(turnLog.filter(event => event.seq < 8), 2)
+report('a closed turn reports closed', turnOne.closed === true && turnTwo.closed === true)
+report('a running turn is not closed', openTurnTwo.closed === false)
+report('the first turn has no cut point', turnOne.undoAnchorSeq === undefined)
+report('undo cuts at the previous turn\'s end', turnTwo.undoAnchorSeq === 4)
+report('the first turn keeps its own question', turnOne.question === 'first question')
+report('the second turn keeps its own question', turnTwo.question === 'second question')
+report('questions never leak across turns', turnTwo.question !== 'first question')
+report('a missing turn has no question', turnContextOfEvents(turnLog, 9).question === undefined)
 process.stdout.write('\n')
 
 process.stdout.write('Taking checkpoint 1…\n')

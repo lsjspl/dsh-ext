@@ -197,6 +197,56 @@ export function RestoreIcon(props: IconProps) {
   )
 }
 
+/** A pencil — edit a turn's question and re-answer it. */
+export function EditIcon(props: IconProps) {
+  const size = props.size ?? 16
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M9.6 2.9l3.5 3.5L5.4 14.1l-4 .5.5-4L9.6 2.9Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <path d="M8.1 4.4l3.5 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+/** Folder icon for file explorer */
+export function FolderIcon(props: IconProps) {
+  const size = props.size ?? 16
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M2 3.5C2 2.67 2.67 2 3.5 2H6L7.5 3.5H12.5C13.33 3.5 14 4.17 14 5V12.5C14 13.33 13.33 14 12.5 14H3.5C2.67 14 2 13.33 2 12.5V3.5Z"
+        fill="currentColor"
+        opacity="0.9"
+      />
+    </svg>
+  )
+}
+
+/** IntelliJ IDEA icon */
+export function IdeaIcon(props: IconProps) {
+  const size = props.size ?? 16
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="1" y="1" width="14" height="14" rx="1" fill="currentColor" opacity="0.9" />
+      <path
+        d="M3 11.5H7.5V12.5H3V11.5ZM3.5 4H5.2L6.8 7.3L8.3 4H10L7.7 9H5.8L3.5 4ZM9.5 4H13V5.2H11V6.5H12.8V7.7H11V9H13V10.2H9.5V4Z"
+        fill="var(--dsw-alias-bg-base, #fff)"
+      />
+    </svg>
+  )
+}
+
+/** A counter-clockwise hook — undo a turn's file changes. */
+export function UndoIcon(props: IconProps) {
+  const size = props.size ?? 16
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2.6 3.4v4h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.1 7.2a5.3 5.3 0 1 1 1.4 5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 /** A branch with two commits, for the changes tab. */
 export function GitIcon(props: IconProps) {
   const size = props.size ?? 16

@@ -13,7 +13,8 @@ import type { InputTriggerServiceContract } from '@deepseek-ai/dsh-client-ui-inp
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import { SettingsPage } from './SettingsPage.tsx'
-import { MessageRestoreAction } from './MessageRestoreAction.tsx'
+import { TurnChangesCard, CardBoundary } from './TurnChangesCard.tsx'
+import { UserEditBubble } from './UserEditBubble.tsx'
 import { ComposerImages } from './ComposerImages.tsx'
 import { SidePanel } from './SidePanel.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
@@ -21,7 +22,7 @@ import { BalanceBadge } from './BalanceView.tsx'
 import { hasImagePicker, openImagePicker, subscribeImagePicker } from './picker-channel.ts'
 import { DICTS, LOCALE_NS } from './locales.ts'
 import { provideLocale, translate, useT } from './use-locale.ts'
-import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, ShieldCheckIcon, VscodeIcon, iconButtonStyle } from './icons.tsx'
+import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, ShieldCheckIcon, VscodeIcon, FolderIcon, IdeaIcon, iconButtonStyle } from './icons.tsx'
 import { Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import { callApi } from './api.ts'
 import { setPanelOpen, setPanelSession, usePanelOpen } from './panel-state.ts'
@@ -102,7 +103,8 @@ export function apply(ctx: Context): void {
   registerModelPicker(ctx)
   registerBalanceBadge(ctx)
   registerAutoReviewMode(ctx)
-  registerMessageRestoreActions(ctx)
+  registerTurnChangesCards(ctx)
+  registerUserEditBubbles(ctx)
   registerSidePanel(ctx)
   registerExplorerToggles(ctx)
   registerOpenEditorLauncher(ctx)
@@ -419,16 +421,25 @@ function registerAutoReviewMode(ctx: Context): void {
       const { view, busy, setMany } = useConfig()
       if (view === undefined) return null
       const review = view.value.commandReview
-      const enabled = review.enabled === true && review.mode === 'all' && (review.writeOnly ?? true)
+      // VISIBILITY FIX: Only show the button when commandReview feature is enabled
+      // in settings. The button toggles the auto-review mode (all tools, write-only),
+      // but if the feature itself is off, there's no review to configure.
+      if (review.enabled !== true) return null
+      // Auto mode is active only when all three conditions are met
+      const autoModeActive = review.enabled === true && review.mode === 'all' && (review.writeOnly ?? true)
       return (
         <button
           type="button"
-          aria-pressed={enabled}
+          aria-pressed={autoModeActive}
           title={t('review.autoChip.hint')}
           disabled={busy}
           onClick={() => {
-            setMany(enabled
-              ? [{ path: ['commandReview', 'enabled'], value: false }]
+            // Toggle the entire auto-review preset on/off
+            setMany(autoModeActive
+              ? [
+                  { path: ['commandReview', 'enabled'], value: false },
+                  { path: ['commandReview', 'mode'], value: 'rules+llm' },
+                ]
               : [
                   { path: ['commandReview', 'enabled'], value: true },
                   { path: ['commandReview', 'mode'], value: 'all' },
@@ -443,10 +454,10 @@ function registerAutoReviewMode(ctx: Context): void {
             gap: 5,
             fontSize: 12,
             padding: '3px 9px',
-            border: `1px solid ${enabled ? token.accent : token.border}`,
+            border: `1px solid ${autoModeActive ? token.accent : token.border}`,
             borderRadius: 999,
-            background: enabled ? 'var(--dsw-alias-interactive-bg-hover, transparent)' : 'transparent',
-            color: enabled ? token.accent : token.textMuted,
+            background: autoModeActive ? 'var(--dsw-alias-interactive-bg-hover, transparent)' : 'transparent',
+            color: autoModeActive ? token.accent : token.textMuted,
             cursor: 'pointer',
             whiteSpace: 'nowrap',
           }}
@@ -466,19 +477,162 @@ function registerAutoReviewMode(ctx: Context): void {
  * the addressed message id. The seat is session-scoped, so `inject(sessionId)`
  * binds the other half of the lookup without reading global panel state.
  */
-function registerMessageRestoreActions(ctx: Context): void {
-  trySlot('assistant checkpoint restore', () => {
-    ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({
-      name: 'conversation.chat.assistant-actions',
-      id: 'dsh-dev-tool-ext-restore',
-      order: 20,
-      registrant: 'dsh-dev-tool-ext',
-      inject: (sessionId) => ({ sessionId: String(sessionId) }),
-    }, function DevToolMessageRestoreAction(props: { messageId: string; sessionId: string }) {
-      const config = useClientConfig()
-      if (config?.checkpoints.enabled !== true) return null
-      return <MessageRestoreAction messageId={props.messageId} sessionId={props.sessionId} />
-    }))
+/**
+ * The per-turn changes card, in the host's completed-turn footer chain.
+ *
+ * `conversation.chat.turnTail` is a chain seat declared by the host's own
+ * turn-tail node (the row that carries the answer's copy/branch actions), so
+ * contributing stacks the card under that row with nothing shadowed. Chain
+ * entries route through a `select` instead of a list entry's `inject`: the
+ * selector reads the engine-owned Turn before mounting, and whatever it
+ * returns (non-null) arrives as the component's `matched` prop. The framework
+ * hands session-scoped components their `sessionId` itself, and the sessions
+ * service reaches the card through this closure — a chain entry has no inject
+ * factory of its own.
+ */
+/**
+ * The user message bubble with the edit pencil (图1/图2).
+ *
+ * `conversation.chat.node` is a keyed seat: the host's own renderer occupies
+ * the `user` cell at the default priority, and a registration at a LOWER
+ * priority shadows that cell — the framework's documented shadowing rank, the
+ * same mechanism `conversation.input.attachments` uses. Shadowing is the only
+ * way to add a per-bubble affordance here: the cell takes one renderer, not a
+ * chain, so there is nothing to contribute to. The shadowed composition
+ * (bubble, hover copy icon) is re-drawn by `UserEditBubble` with the pencil
+ * added; the trade — this file owns the bubble's look against host redesigns
+ * — is written up there.
+ */
+function registerUserEditBubbles(ctx: Context): void {
+  trySlot('user message edit bubble', () => {
+    ctx.inject(['slots', 'sessions', 'workspaces'], (scope: Context) => {
+      const sessions = scope.sessions as unknown as ISessions
+      const workspaces = scope.workspaces as unknown as { connectWorkspace(workspaceId: string): Promise<string> }
+      scope.slots.inject('conversation.chat.node', () => scope.slots.register({
+        name: 'conversation.chat.node',
+        key: 'user',
+        registrant: 'dsh-dev-tool-ext',
+        priority: -10,
+        inject: (sessionId) => ({
+          sessionId: String(sessionId),
+          hooks: { turnData: () => () => undefined },
+        }),
+      }, function DevToolUserEditBubble(props: {
+        node: { kind: string; data: { seq: number; time: number; content: readonly unknown[] } }
+        sessionId: string
+        useWorkspaces?: <T>(select: (state: { items: readonly { workspaceId: string; path: string }[] }) => T) => T
+      }) {
+        const config = useClientConfig()
+        if (config?.checkpoints.enabled !== true) return null
+        if (props.node?.kind !== 'user') return null
+        return (
+          <UserEditBubble
+            sessionId={String(props.sessionId)}
+            sessions={sessions}
+            workspaces={workspaces}
+            node={props.node.data}
+            useWorkspaces={props.useWorkspaces}
+          />
+        )
+      }))
+    })
+  })
+}
+
+function registerTurnChangesCards(ctx: Context): void {
+  trySlot('turn changes card', () => {
+    ctx.inject(['slots', 'sessions', 'workspaces'], (scope: Context) => {
+      const sessions = scope.sessions as unknown as ISessions
+      const workspaces = scope.workspaces as unknown as { connectWorkspace(workspaceId: string): Promise<string> }
+      // Module-level cache for the last valid turn per sessionId, so transient
+      // undefined turn values during navigation don't unmount the card.
+      const lastTurn = new Map<string, { turn: number; status: 'open' | 'closed' | 'unknown' }>()
+      scope.slots.inject('conversation.chat.turnTail', () => scope.slots.register({
+        name: 'conversation.chat.turnTail',
+        registrant: 'dsh-dev-tool-ext',
+        // Mount for every turn tail — running ones included, so the file list
+        // is live while the agent works. The card hides itself when the turn
+        // never mutated a tracked file.
+        // STABILITY FIX: keep the last valid turn value per session, so a
+        // transient undefined during navigation or session-switch doesn't
+        // unmount the card and lose the data store subscription. The elect-one
+        // chain re-runs on every owner change; a brief undefined here would
+        // return null, unmount this card, and let the host's "产物" card steal
+        // the slot — when the turn resolves, the host card stays and this one
+        // never re-mounts. Caching the last good value keeps the card mounted.
+        select: (owner) => {
+          const sessionId = String(owner.sessionId ?? '')
+          const turn = owner.turn?.turn
+          const status = owner.turn?.status
+          if (Number.isSafeInteger(turn) && status !== undefined) {
+            const value = { turn, status }
+            lastTurn.set(sessionId, value)
+            return value
+          }
+          // Turn is temporarily undefined — return the last known value for
+          // this session to keep the card mounted, or null if this is the
+          // first paint and we have nothing cached yet.
+          return lastTurn.get(sessionId) ?? null
+        },
+        // The tail is an ELECT-ONE chain: entries are tried in ascending
+        // priority and the first non-null select wins — this is not additive.
+        // The host's own "产物" entry sits at the default 0 and declines when
+        // the turn produced no files, which is why this card appeared only on
+        // some turns. A negative priority puts the card first; when it hides
+        // itself (select still matches, the component returns null) the host's
+        // deliverables row does NOT come back — acceptable, because a turn with
+        // file changes usually has that row too, and the card carries the same
+        // file list with review affordances.
+        priority: -10,
+      }, function DevToolTurnChangesCard(props: {
+        matched: { turn: number; status: 'open' | 'closed' | 'unknown' }
+        sessionId: string
+        useWorkspaces?: <T>(select: (state: { items: readonly { workspaceId: string; path: string }[] }) => T) => T
+      }) {
+        const config = useClientConfig()
+        // Called unconditionally at THIS level: the hook order here is fixed,
+        // and the card below receives plain data. (A hook inside the card
+        // reached through differing early-return paths is the React #310 this
+        // component once crashed with — keep hook calls out of the card's
+        // conditional surface.)
+        const workspaceItems = props.useWorkspaces?.(state => state.items)
+        // The seat is elect-one, so "not yet" must still render — a null here
+        // yields the slot to nothing, and when the config arrives a moment
+        // later nothing re-elects the card back. Render the card (which shows
+        // its own checking placeholder) and let IT decide visibility from the
+        // same config.
+        if (config === undefined) {
+          return (
+            <CardBoundary>
+              <TurnChangesCard
+                sessionId={String(props.sessionId)}
+                turn={props.matched.turn}
+                status={props.matched.status}
+                workspaceItems={workspaceItems}
+                workspaces={workspaces}
+                sessions={sessions}
+                disabled
+              />
+            </CardBoundary>
+          )
+        }
+        if (config.checkpoints.enabled !== true) {
+          return null
+        }
+        return (
+          <CardBoundary>
+            <TurnChangesCard
+              sessionId={String(props.sessionId)}
+              turn={props.matched.turn}
+              status={props.matched.status}
+              workspaceItems={workspaceItems}
+              workspaces={workspaces}
+              sessions={sessions}
+            />
+          </CardBoundary>
+        )
+      }))
+    })
   })
 }
 
@@ -588,33 +742,118 @@ function registerOpenEditorLauncher(ctx: Context): void {
       const config = useClientConfig()
       const [busy, setBusy] = useState(false)
       const [failure, setFailure] = useState<{ text: string; seq: number } | undefined>(undefined)
+      const [editorType, setEditorType] = useState<'explorer' | 'vscode' | 'idea'>('vscode')
+      const [dropdownOpen, setDropdownOpen] = useState(false)
       if (config?.explorer.enabled !== true) return null
 
-      const open = async () => {
+      const open = async (editor: 'explorer' | 'vscode' | 'idea') => {
         setBusy(true)
         setFailure(undefined)
+        setDropdownOpen(false)
         const session = props.sessionId !== undefined && props.sessionId.length > 0
-          ? `?session=${encodeURIComponent(props.sessionId)}`
-          : ''
+          ? `?session=${encodeURIComponent(props.sessionId)}&editor=${editor}`
+          : `?editor=${editor}`
+        console.log('[DevTool] Opening with editor:', editor, 'URL:', `/explorer/open-editor${session}`)
         const result = await callApi<OpenEditorResult>(`/explorer/open-editor${session}`)
+        console.log('[DevTool] Open result:', result)
         setBusy(false)
         if (!result.ok) {
           setFailure({ text: t('explorer.openEditorFailed', { message: result.message }), seq: Date.now() })
+        } else {
+          setEditorType(editor)
         }
       }
 
       return (
         <>
-          <button
-            type="button"
-            aria-label={t('explorer.openEditor')}
-            title={t('explorer.openEditor')}
-            disabled={busy}
-            onClick={() => { void open() }}
-            style={iconButtonStyle}
-          >
-            <VscodeIcon size={16} />
-          </button>
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            <button
+              type="button"
+              aria-label={t('explorer.openEditor')}
+              title={t('explorer.openEditor')}
+              disabled={busy}
+              onClick={() => { setDropdownOpen(!dropdownOpen) }}
+              style={{
+                ...iconButtonStyle,
+                width: 'auto',
+                height: 28,
+                padding: '0 10px',
+                borderRadius: 6,
+                gap: 6,
+              }}
+            >
+              {editorType === 'explorer' ? <FolderIcon size={16} /> : editorType === 'idea' ? <IdeaIcon size={16} /> : <VscodeIcon size={16} />}
+              <span style={{ fontSize: 13 }}>{t('explorer.openLabel')}</span>
+            </button>
+            {dropdownOpen && (
+              <>
+                <div
+                  style={{
+                    position: 'fixed',
+                    inset: 0,
+                    zIndex: 999,
+                  }}
+                  onClick={() => { setDropdownOpen(false) }}
+                />
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    right: 0,
+                    marginTop: 4,
+                    background: 'var(--dsw-alias-bg-layer-2, #1a1d24)',
+                    border: '1px solid var(--dsw-alias-border-l2, rgba(255,255,255,0.1))',
+                    borderRadius: 8,
+                    boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+                    minWidth: 180,
+                    zIndex: 1000,
+                    overflow: 'hidden',
+                  }}
+                >
+                  {([
+                    { type: 'explorer' as const, icon: FolderIcon },
+                    { type: 'vscode' as const, icon: VscodeIcon },
+                    { type: 'idea' as const, icon: IdeaIcon },
+                  ]).map(({ type, icon: Icon }) => (
+                    <button
+                      key={type}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => { void open(type) }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        width: '100%',
+                        padding: '10px 14px',
+                        border: 'none',
+                        background: editorType === type
+                          ? 'var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,0.08))'
+                          : 'transparent',
+                        color: 'var(--dsw-alias-label-primary, #e8eaed)',
+                        fontSize: 13,
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                        textAlign: 'left',
+                        opacity: busy ? 0.5 : 1,
+                        transition: 'background 140ms ease',
+                        fontWeight: 500,
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!busy) e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,0.08))'
+                      }}
+                      onMouseLeave={(e) => {
+                        if (editorType !== type) e.currentTarget.style.background = 'transparent'
+                      }}
+                    >
+                      <Icon size={16} />
+                      <span style={{ flex: 1 }}>{t(`explorer.openWith.${type}` as never)}</span>
+                      {editorType === type && <span style={{ fontSize: 14, color: 'var(--dsw-alias-brand-primary, #5c9fff)' }}>✓</span>}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           {failure !== undefined && (
             // Keyed by a per-show sequence: re-showing restarts the fade.
             <Toast key={failure.seq} text={failure.text} onDone={() => { setFailure(undefined) }} />

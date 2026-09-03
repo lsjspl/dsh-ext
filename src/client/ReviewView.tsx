@@ -17,14 +17,14 @@ import type { ChangeEntry, ExplorerStatus } from '../shared/api-contract.ts'
 
 /** Line-count badges, in git's own colours — additions green, removals red. */
 export const countAddedStyle = {
-  fontSize: 11,
+  fontSize: 12,
   color: token.success,
   fontFamily: 'ui-monospace, monospace',
   flex: '0 0 auto',
 } as const
 
 export const countRemovedStyle = {
-  fontSize: 11,
+  fontSize: 12,
   color: token.danger,
   fontFamily: 'ui-monospace, monospace',
   flex: '0 0 auto',
@@ -95,14 +95,14 @@ function ReviewRow(props: {
           aria-hidden="true"
           style={{
             fontFamily: 'ui-monospace, monospace',
-            fontSize: 12,
+            fontSize: 13,
             color: change.untracked ? token.textMuted : token.accent,
             flex: '0 0 auto',
           }}
         >
           {change.index}{change.worktree}
         </span>
-        <FileIcon size={15} name={baseOf(change.path)} />
+        <FileIcon size={16} name={baseOf(change.path)} />
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {change.from !== undefined && (
             <span style={{ color: token.textMuted }}>{change.from} → </span>
@@ -111,7 +111,7 @@ function ReviewRow(props: {
         </span>
         {counts?.added !== undefined && <span style={countAddedStyle}>+{counts.added}</span>}
         {counts?.removed !== undefined && <span style={countRemovedStyle}>-{counts.removed}</span>}
-        <span style={{ fontSize: 11, color: token.textMuted, flex: '0 0 auto' }}>
+        <span style={{ fontSize: 12, color: token.textMuted, flex: '0 0 auto' }}>
           {describeChange(change, t)}
         </span>
       </button>
@@ -187,8 +187,8 @@ function FolderRow(props: {
         onClick={() => { props.onToggle(node.path) }}
         style={{ ...rowStyle, paddingLeft: 4 + depth * INDENT }}
       >
-        <ChevronIcon size={12} open={open} />
-        <FolderIcon size={15} open={open} />
+        <ChevronIcon size={14} open={open} />
+        <FolderIcon size={16} open={open} />
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
         {counts?.added !== undefined && <span style={countAddedStyle}>+{counts.added}</span>}
         {counts?.removed !== undefined && <span style={countRemovedStyle}>-{counts.removed}</span>}
@@ -272,15 +272,33 @@ export function ReviewView(props: { status: ExplorerStatus; onOpenDiff: (path: s
   }, [])
 
   if (!props.status.isRepository) {
-    return <div style={{ fontSize: 13, color: token.textMuted, padding: '8px 0' }}>{t('explorer.noRepo')}</div>
+    return <div style={{ fontSize: 14, color: token.textMuted, padding: '8px 0' }}>{t('explorer.noRepo')}</div>
   }
   if (changes.length === 0) {
-    return <div style={{ fontSize: 13, color: token.textMuted, padding: '8px 0' }}>{t('explorer.noChanges')}</div>
+    return <div style={{ fontSize: 14, color: token.textMuted, padding: '8px 0' }}>{t('explorer.noChanges')}</div>
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 4,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          // The panel scrolls the whole view (the file browser and review list
+          // share that overflow container), so the filter row would ride away
+          // with the list. Sticky keeps it pinned to the top of the panel while
+          // the list scrolls underneath. Needs an opaque background so a list
+          // row passing under it does not show through the gaps between
+          // buttons, and a z-index to sit above those rows.
+          position: 'sticky',
+          top: 0,
+          zIndex: 1,
+          background: token.surfaceBase,
+          padding: '2px 0',
+        }}
+      >
         {FILTERS.map(name => {
           const active = filter === name
           return (
@@ -291,8 +309,8 @@ export function ReviewView(props: { status: ExplorerStatus; onOpenDiff: (path: s
               aria-pressed={active}
               style={{
                 ...buttonStyle,
-                fontSize: 11,
-                padding: '2px 8px',
+                fontSize: 13,
+                padding: '4px 12px',
                 borderColor: active ? token.accent : token.border,
                 color: active ? token.accent : token.text,
               }}
@@ -311,11 +329,11 @@ export function ReviewView(props: { status: ExplorerStatus; onOpenDiff: (path: s
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: 22,
-            height: 22,
+            width: 26,
+            height: 26,
             padding: 0,
             border: 'none',
-            borderRadius: 5,
+            borderRadius: 6,
             background: 'transparent',
             color: token.textMuted,
             cursor: 'pointer',
@@ -323,12 +341,12 @@ export function ReviewView(props: { status: ExplorerStatus; onOpenDiff: (path: s
           }}
         >
           {/* The icon names the view a click SWITCHES to, like every editor's layout toggle. */}
-          {grouped ? <FilesIcon size={14} /> : <FolderIcon size={15} open={false} />}
+          {grouped ? <FilesIcon size={16} /> : <FolderIcon size={16} open={false} />}
         </button>
       </div>
 
       {filtered.length === 0 ? (
-        <div style={{ fontSize: 13, color: token.textMuted, padding: '8px 0' }}>{t('explorer.noChanges')}</div>
+        <div style={{ fontSize: 14, color: token.textMuted, padding: '8px 0' }}>{t('explorer.noChanges')}</div>
       ) : grouped && tree !== undefined ? (
         <ul style={treeStyle}>
           <FolderNodes node={tree} depth={0} collapsed={collapsed} onToggle={onToggle} countsFor={rowCounts} onOpenDiff={props.onOpenDiff} />

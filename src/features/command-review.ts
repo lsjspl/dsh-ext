@@ -350,7 +350,10 @@ export function mountCommandReview(
       return await next()
     }
 
-    const matched = screeningPatterns(settings).find(pattern => pattern.test(command))
+    const matched = screeningPatterns(settings).find(pattern => {
+      pattern.lastIndex = 0
+      return pattern.test(command)
+    })
 
     const finish = (verdict: ReviewVerdict, reason: string, decidedBy: AuditEntry['decidedBy']): PreToolDecision => {
       audit.record({
@@ -375,8 +378,7 @@ export function mountCommandReview(
       // No model is consulted, so the pattern hit cannot be adjudicated —
       // escalate to the user rather than guess. Deny would make a
       // false-positive pattern unusable; allow would make the rules decorative.
-      finish('ask', `matches a high-risk pattern: ${matched?.source ?? 'unknown'}`, 'rules')
-      return { kind: 'ask', reason: `This command matches a high-risk pattern (${matched?.source ?? 'unknown'}).` }
+      return finish('ask', `matches a high-risk pattern: ${matched?.source ?? 'unknown'}`, 'rules')
     }
 
     const verdict = await askReviewer(ctx, settings, exec.name, command, exec.signal)

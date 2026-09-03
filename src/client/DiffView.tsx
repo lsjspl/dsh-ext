@@ -182,7 +182,7 @@ function GapBar(props: { gap: Gap; onExpand: (start: number) => void }) {
               border: 'none',
               background: 'transparent',
               color: token.textMuted,
-              fontSize: 11,
+              fontSize: 12,
               textAlign: 'left',
               cursor: 'pointer',
               fontFamily: 'inherit',
@@ -216,7 +216,7 @@ function injectDiffStyles(): void {
   const style = document.createElement('style')
   style.dataset.dshPlugin = 'dsh-dev-tool-ext'
   style.textContent = `
-.${DIFF_CLASS} { border-collapse: collapse; table-layout: fixed; width: 100%; font-size: 12px; color: ${token.text}; }
+.${DIFF_CLASS} { border-collapse: collapse; table-layout: fixed; width: 100%; font-size: 13px; color: ${token.text}; }
 .${DIFF_CLASS} td { padding: 0; vertical-align: top; }
 .${DIFF_CLASS} .diff-line { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; line-height: 1.55; }
 .${DIFF_CLASS} .diff-gutter-col { width: 4.5ch; }
@@ -405,7 +405,7 @@ export function DiffView(props: { path: string; scope: string }) {
     return <Notice kind="error">{t('explorer.viewFailed', { message: review.error })}</Notice>
   }
   if (data === undefined) {
-    return <div style={{ fontSize: 13, color: token.textMuted }}>{t('common.loading')}</div>
+    return <div style={{ fontSize: 14, color: token.textMuted }}>{t('common.loading')}</div>
   }
 
   const changedRows = hunks.reduce(
@@ -413,7 +413,7 @@ export function DiffView(props: { path: string; scope: string }) {
     0,
   )
   if (changedRows === 0) {
-    return <div style={{ fontSize: 13, color: token.textMuted }}>{t('explorer.noDiff')}</div>
+    return <div style={{ fontSize: 14, color: token.textMuted }}>{t('explorer.noDiff')}</div>
   }
 
   return (
@@ -421,7 +421,7 @@ export function DiffView(props: { path: string; scope: string }) {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
         <span
           title={props.path}
-          style={{ fontSize: 12, color: token.textMuted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          style={{ fontSize: 13, color: token.textMuted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
         >{props.path}</span>
         {data.added !== undefined && <span style={countAddedStyle}>+{data.added}</span>}
         {data.removed !== undefined && <span style={countRemovedStyle}>-{data.removed}</span>}

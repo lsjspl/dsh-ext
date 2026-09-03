@@ -1,12 +1,61 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-workspace'
-import { spawn } from 'node:child_process'
+import { spawn, exec } from 'node:child_process'
 import { readFile, readdir, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep, dirname, basename } from 'node:path'
+import { promisify } from 'node:util'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
 import { git, hasGit, repositoryRoot, splitNul } from '../git.ts'
 import type { Config } from '../config.ts'
 import type { ChangeEntry, ExplorerStatus, TreeEntry } from '../shared/api-contract.ts'
+
+const execAsync = promisify(exec)
+
+/**
+ * Resolve a path pattern with wildcards to actual paths.
+ * Returns all matching paths, or empty array if no matches.
+ */
+async function resolveWildcard(pattern: string): Promise<string[]> {
+  // If no wildcard, return as-is
+  if (!pattern.includes('*')) {
+    return [pattern]
+  }
+
+  const parts = pattern.split(sep)
+  const firstWildcardIndex = parts.findIndex(p => p.includes('*'))
+
+  if (firstWildcardIndex === -1) {
+    return [pattern]
+  }
+
+  // Build the base directory (everything before the first wildcard)
+  const basePath = parts.slice(0, firstWildcardIndex).join(sep)
+  const wildcardPart = parts[firstWildcardIndex]
+  const remaining = parts.slice(firstWildcardIndex + 1)
+
+  try {
+    const entries = await readdir(basePath, { withFileTypes: true })
+    const wildcard = wildcardPart ?? ''
+    const regex = new RegExp('^' + wildcard.replace(/\*/g, '.*') + '$')
+    const matches: string[] = []
+
+    for (const entry of entries) {
+      if (regex.test(entry.name)) {
+        const fullPath = join(basePath, entry.name, ...remaining)
+        if (remaining.length > 0 && remaining.some(p => p.includes('*'))) {
+          // Recursively resolve remaining wildcards
+          const resolved = await resolveWildcard(fullPath)
+          matches.push(...resolved)
+        } else {
+          matches.push(fullPath)
+        }
+      }
+    }
+    return matches
+  } catch {
+    return []
+  }
+}
 
 /**
  * Feature 5 — a side panel showing the workspace directory tree and its
@@ -133,29 +182,117 @@ const MAX_VIEW_LINES = 5000
  * passed verbatim — see the comment on `openInEditor` for why the quotes are
  * doubled and sent unescaped.
  */
-function editorCandidates(): string[] {
+function editorCandidates(editorType: string): string[] {
   const fromEnv = process.env.DSH_EXT_EDITOR
   const home = process.env.USERPROFILE ?? process.env.HOME ?? ''
   const candidates = fromEnv === undefined || fromEnv.length === 0 ? [] : [fromEnv]
-  if (process.platform === 'win32') {
-    const localAppData = process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
-    const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
-    candidates.push(
-      join(localAppData, 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
-      join(programFiles, 'Microsoft VS Code', 'bin', 'code.cmd'),
-      join(localAppData, 'Programs', 'cursor', 'resources', 'app', 'bin', 'cursor.cmd'),
-    )
-  } else if (process.platform === 'darwin') {
-    candidates.push(
-      '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
-      join(home, 'Applications', 'Visual Studio Code.app', 'Contents', 'Resources', 'app', 'bin', 'code'),
-      '/opt/homebrew/bin/code',
-      '/usr/local/bin/code',
-    )
+
+  if (editorType === 'idea') {
+    // IntelliJ IDEA paths
+    if (process.platform === 'win32') {
+      const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
+      const localAppData = process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
+      // Use wildcards to match any IDEA version
+      candidates.push(
+        // Standard Program Files installations (wildcard matches any version)
+        join(programFiles, 'JetBrains', 'IntelliJ IDEA *', 'bin', 'idea64.exe'),
+        join(programFiles, 'JetBrains', 'IntelliJ IDEA Community Edition *', 'bin', 'idea64.exe'),
+        // Toolbox installations
+        join(localAppData, 'JetBrains', 'Toolbox', 'apps', 'IDEA-U', 'ch-0', '*', 'bin', 'idea64.exe'),
+        join(localAppData, 'JetBrains', 'Toolbox', 'apps', 'IDEA-C', 'ch-0', '*', 'bin', 'idea64.exe'),
+      )
+    } else if (process.platform === 'darwin') {
+      candidates.push(
+        '/Applications/IntelliJ IDEA.app/Contents/MacOS/idea',
+        '/Applications/IntelliJ IDEA CE.app/Contents/MacOS/idea',
+        join(home, 'Applications', 'IntelliJ IDEA.app', 'Contents', 'MacOS', 'idea'),
+      )
+    } else {
+      candidates.push('/usr/bin/idea', '/usr/local/bin/idea', '/snap/bin/intellij-idea-community')
+    }
   } else {
-    candidates.push('/usr/bin/code', '/usr/local/bin/code', '/snap/bin/code', '/var/lib/flatpak/exports/bin/com.visualstudio.code')
+    // VS Code paths (default)
+    if (process.platform === 'win32') {
+      const localAppData = process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
+      const programFiles = process.env.ProgramFiles ?? 'C:\\Program Files'
+      candidates.push(
+        join(localAppData, 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
+        join(programFiles, 'Microsoft VS Code', 'bin', 'code.cmd'),
+        join(localAppData, 'Programs', 'cursor', 'resources', 'app', 'bin', 'cursor.cmd'),
+      )
+    } else if (process.platform === 'darwin') {
+      candidates.push(
+        '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
+        join(home, 'Applications', 'Visual Studio Code.app', 'Contents', 'Resources', 'app', 'bin', 'code'),
+        '/opt/homebrew/bin/code',
+        '/usr/local/bin/code',
+      )
+    } else {
+      candidates.push('/usr/bin/code', '/usr/local/bin/code', '/snap/bin/code', '/var/lib/flatpak/exports/bin/com.visualstudio.code')
+    }
   }
   return candidates
+}
+
+/**
+ * Open a path in the system file explorer.
+ */
+async function openInFileExplorer(target: string, isFile: boolean): Promise<{ opened: boolean; editor: string }> {
+  return await new Promise((resolve, reject) => {
+    try {
+      if (process.platform === 'win32') {
+        // Windows: `explorer.exe` is the Windows Shell's COM launcher, not a
+        // normal process. Spawning it directly with a path frequently exits
+        // nonzero (reproduced here) and, worse, opens no window at all — the
+        // process is a forwarding stub that needs the shell to be already
+        // running and fails silently in a headless/CI or a fresh GUI session.
+        // The Web shell's loopback server can be spawned under exactly such a
+        // session, so a bare `spawn('explorer.exe', [path])` is the button that
+        // reliably does nothing.
+        //
+        // `explorer.exe /select,path` (the "reveal this file" form) is even
+        // less reliable on this setup: it exits nonzero and opens no window —
+        // reproduced under scripted spawns. The directory form asks the running
+        // Explorer to open a folder via ShellExecute, which works. So a FILE is
+        // revealed by opening its PARENT DIRECTORY window instead, which is the
+        // same dependable `cmd /c start ""` route and lands the user one level
+        // up from the file — close enough to "show it in Explorer" without
+        // betting the click on a /select that silently drops.
+        //
+        // `start` treats its FIRST quoted argument as a window title, so an
+        // empty `""` is added to keep the path from being consumed as one. The
+        // whole path arg is sent verbatim (windowsVerbatimArguments:true) so cmd
+        // does not re-parse a path containing spaces.
+        const directory = isFile ? dirname(target) : target
+        const normalizedPath = directory.replace(/\//g, '\\')
+        const child = spawn(
+          process.env.COMSPEC ?? 'cmd.exe',
+          ['/d', '/s', '/c', 'start', '', normalizedPath],
+          { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true },
+        )
+
+        child.on('error', (error) => {
+          reject(new ApiError(500, `could not open file explorer: ${error.message}`))
+        })
+
+        child.unref()
+        resolve({ opened: true, editor: 'file-explorer' })
+      } else if (process.platform === 'darwin') {
+        // macOS: use open with -R to reveal in Finder
+        const child = spawn('open', ['-R', target], { detached: true, stdio: 'ignore' })
+        child.unref()
+        resolve({ opened: true, editor: 'file-explorer' })
+      } else {
+        // Linux: use xdg-open
+        const child = spawn('xdg-open', [target], { detached: true, stdio: 'ignore' })
+        child.unref()
+        resolve({ opened: true, editor: 'file-explorer' })
+      }
+    } catch (error: unknown) {
+      console.error('[Explorer] Exception:', error)
+      reject(new ApiError(500, `could not open file explorer: ${error instanceof Error ? error.message : String(error)}`))
+    }
+  })
 }
 
 /**
@@ -202,22 +339,58 @@ function launchFailure(stderr: readonly Buffer[], code: number | null): ApiError
  * @param target - absolute path already proven inside `root`.
  * @param isFile - true when `target` is a file, so it opens in the folder's window.
  */
-async function openInEditor(root: string, target: string, isFile: boolean): Promise<{ opened: boolean; editor: string }> {
-  let launcher: string | undefined
-  for (const candidate of editorCandidates()) {
-    try {
-      await stat(candidate)
-      launcher = candidate
-      break
-    } catch { /* try the next location */ }
-  }
-  if (launcher === undefined) {
-    throw new ApiError(409, 'no VS Code installation was found; set DSH_EXT_EDITOR to your editor\'s path')
+async function openInEditor(root: string, target: string, isFile: boolean, editorType: string): Promise<{ opened: boolean; editor: string }> {
+  // Handle file explorer option
+  if (editorType === 'explorer') {
+    return await openInFileExplorer(target, isFile)
   }
 
-  // `--reuse-window` with the folder first keeps a file opening inside the
-  // project's own window instead of a bare single-file window with no context.
-  const args = isFile ? [root, '--reuse-window', '--goto', target] : [root]
+  let launcher: string | undefined
+  const candidates = editorCandidates(editorType)
+
+  // Try each candidate, resolving wildcards if present
+  for (const candidate of candidates) {
+    if (candidate.includes('*')) {
+      // Resolve wildcard patterns
+      const resolved = await resolveWildcard(candidate)
+      for (const path of resolved) {
+        try {
+          await stat(path)
+          launcher = path
+          console.log('[Explorer] Found launcher for', editorType, ':', launcher)
+          break
+        } catch { /* try next */ }
+      }
+    } else {
+      // No wildcard, try directly
+      try {
+        await stat(candidate)
+        launcher = candidate
+        console.log('[Explorer] Found launcher for', editorType, ':', launcher)
+        break
+      } catch { /* try next */ }
+    }
+    if (launcher !== undefined) break
+  }
+
+  if (launcher === undefined) {
+    const editorName = editorType === 'idea' ? 'IntelliJ IDEA' : 'VS Code'
+    throw new ApiError(409, `no ${editorName} installation was found; set DSH_EXT_EDITOR to your editor's path`)
+  }
+
+  // Different editors have different command line arguments
+  let args: string[]
+  if (editorType === 'idea') {
+    // IntelliJ IDEA: simple path argument, optionally with line number
+    args = isFile ? [target] : [root]
+    console.log('[Explorer] Using IDEA args:', args)
+  } else {
+    // VS Code: `--reuse-window` with the folder first keeps a file opening inside the
+    // project's own window instead of a bare single-file window with no context.
+    args = isFile ? [root, '--reuse-window', '--goto', target] : [root]
+    console.log('[Explorer] Using VSCode args:', args)
+  }
+
   const isBatch = launcher.toLowerCase().endsWith('.cmd') || launcher.toLowerCase().endsWith('.bat')
 
   // Batch launchers go through cmd.exe with the whole command line pre-quoted,
@@ -892,7 +1065,9 @@ export function mountExplorer(
       // which is what the toolbar button asks for.
       const requested = query.get('path') ?? ''
       const target = requested.length === 0 ? root : await containedPath(root, requested)
-      return await openInEditor(root, target, requested.length > 0)
+      const editorType = query.get('editor') ?? 'vscode'
+      ctx.logger('dsh-dev-tool-ext').info('[Explorer] Opening with editor type: %s, target: %s', editorType, target)
+      return await openInEditor(root, target, requested.length > 0, editorType)
     },
   })
 }

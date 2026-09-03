@@ -5,7 +5,7 @@ import { INDENT, Notice, rowStyle, token } from './ui.tsx'
 import { useT } from './use-locale.ts'
 import { FileIcon, FolderIcon } from './file-icons.tsx'
 import { ChevronIcon, CloseIcon, FilesIcon, GitIcon, PlusIcon, iconButtonStyle } from './icons.tsx'
-import { useTabs, type Tab, type TabKind } from './tabs.ts'
+import { useTabs, bindPanelTabs, type Tab, type TabKind } from './tabs.ts'
 import { CodeView, DiffView } from './DiffView.tsx'
 import { ReviewView } from './ReviewView.tsx'
 import type { ExplorerStatus, FileView, TreeEntry } from '../shared/api-contract.ts'
@@ -20,11 +20,11 @@ import type { ExplorerStatus, FileView, TreeEntry } from '../shared/api-contract
  * set is a preference, not component state. This file only draws: the strip,
  * the four view kinds a tab can hold, and nothing else.
  *
- * Typography follows the host's own scale rather than this file's taste: the
- * panel root renders at 13px (the size the host's own compact surfaces — read
- * cards, search blocks — are set at), secondary text at 12px, and corner notes
- * at 11px. The older draft used 10–12px throughout and read as fine print
- * against everything around it.
+ * Typography follows the host's own scale rather than this file's taste: rows
+ * render at 14px (the size of the host's own sidebar and menu rows — probed
+ * from its compiled stylesheets), secondary text at 13px, and corner notes at
+ * 12px (the host's smallest size). The older draft used 11–13px throughout and
+ * read as fine print against everything around it.
  *
  * Read-only by construction. Every endpoint behind it is a git query or a file
  * read, so there is no button here that can change the user's repository — the
@@ -75,10 +75,10 @@ function baseOf(path: string): string {
 }
 
 /** Secondary text: row sizes, meta beside a title. */
-const metaStyle = { fontSize: 12, color: token.textMuted } as const
+const metaStyle = { fontSize: 13, color: token.textMuted } as const
 
 /** Corner notes: truncation and per-list footnotes. */
-const noteStyle = { fontSize: 11, color: token.textMuted } as const
+const noteStyle = { fontSize: 12, color: token.textMuted } as const
 
 const treeStyle = { listStyle: 'none', margin: 0, padding: 0 } as const
 
@@ -116,11 +116,11 @@ function TreeRow(props: {
       style={{ ...rowStyle, paddingLeft: 4 + depth * INDENT }}
     >
       {entry.kind === 'directory'
-        ? <ChevronIcon size={12} open={open} />
-        : <span aria-hidden="true" style={{ width: 12, flex: '0 0 auto' }} />}
+        ? <ChevronIcon size={14} open={open} />
+        : <span aria-hidden="true" style={{ width: 14, flex: '0 0 auto' }} />}
       {entry.kind === 'directory'
-        ? <FolderIcon size={15} open={open} />
-        : <FileIcon size={15} name={entry.name} />}
+        ? <FolderIcon size={16} open={open} />
+        : <FileIcon size={16} name={entry.name} />}
       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{entry.name}</span>
       {entry.kind === 'file' && <span style={metaStyle}>{formatSize(entry.size)}</span>}
     </button>
@@ -188,7 +188,7 @@ function FilesView(props: { workspace: string | undefined; sessionId: string | u
 
   if (tree.error !== undefined) return <Notice kind="error">{tree.error}</Notice>
   if (tree.data === undefined) {
-    return <div style={{ fontSize: 13, color: token.textMuted }}>{t('common.loading')}</div>
+    return <div style={{ fontSize: 14, color: token.textMuted }}>{t('common.loading')}</div>
   }
 
   return (
@@ -230,7 +230,7 @@ function EditorView(props: { path: string; scope: string }) {
     return <Notice kind="error">{t('explorer.viewFailed', { message: file.error })}</Notice>
   }
   if (file.data === undefined) {
-    return <div style={{ fontSize: 13, color: token.textMuted }}>{t('common.loading')}</div>
+    return <div style={{ fontSize: 14, color: token.textMuted }}>{t('common.loading')}</div>
   }
 
   return (
@@ -238,7 +238,7 @@ function EditorView(props: { path: string; scope: string }) {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <span
           title={props.path}
-          style={{ fontSize: 12, color: token.textMuted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          style={{ fontSize: 13, color: token.textMuted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
         >{props.path}</span>
         <span style={noteStyle}>{formatSize(file.data.bytes)}</span>
       </div>
@@ -294,9 +294,9 @@ function TabStrip(props: {
               alignItems: 'center',
               gap: 6,
               maxWidth: '38%',
-              padding: '5px 6px 5px 9px',
+              padding: '6px 7px 6px 10px',
               borderRadius: 6,
-              fontSize: 12,
+              fontSize: 14,
               cursor: 'pointer',
               userSelect: 'none',
               color: active ? token.text : token.textMuted,
@@ -306,9 +306,9 @@ function TabStrip(props: {
               minWidth: 0,
             }}
           >
-            {tab.kind === 'files' && <FilesIcon size={14} />}
-            {(tab.kind === 'review' || tab.kind === 'diff') && <GitIcon size={14} />}
-            {tab.kind === 'editor' && <FileIcon size={14} name={baseOf(tab.path ?? '')} />}
+            {tab.kind === 'files' && <FilesIcon size={16} />}
+            {(tab.kind === 'review' || tab.kind === 'diff') && <GitIcon size={16} />}
+            {tab.kind === 'editor' && <FileIcon size={16} name={baseOf(tab.path ?? '')} />}
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
             <button
               type="button"
@@ -331,7 +331,7 @@ function TabStrip(props: {
                 flex: '0 0 auto',
               }}
             >
-              <CloseIcon size={11} />
+              <CloseIcon size={12} />
             </button>
           </div>
         )
@@ -361,9 +361,9 @@ function TabStrip(props: {
             title={t('explorer.newTab')}
             aria-expanded={menuOpen}
             onClick={() => { setMenuOpen(value => !value) }}
-            style={{ ...iconButtonStyle, width: 24, height: 24, flex: '0 0 auto' }}
+            style={{ ...iconButtonStyle, width: 26, height: 26, flex: '0 0 auto' }}
           >
-            <PlusIcon size={14} />
+            <PlusIcon size={16} />
           </button>
         }
       />
@@ -383,6 +383,9 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
   // has not resolved a workspace; the settings preview gets an isolated scope.
   const tabScope = props.workspace ?? (props.sessionId === undefined ? 'settings-preview' : `session:${props.sessionId}`)
   const { tabs, activeId, open: openPanelTab, select: selectPanelTab, close: closePanelTab } = useTabs(tabScope)
+  // Publish the scope so the conversation's per-turn changes card can open a
+  // diff or editor tab here from outside this tree.
+  useEffect(() => bindPanelTabs(tabScope), [tabScope])
   const active = tabs.find(tab => tab.id === activeId)
   const scope = [
     props.workspace === undefined ? undefined : `workspace=${encodeURIComponent(props.workspace)}`,
@@ -439,7 +442,7 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
         <ViewBoundary key={active?.id ?? 'none'}>
           {active?.kind === 'review' && (
             status.data === undefined
-              ? <div style={{ fontSize: 13, color: token.textMuted }}>{t('common.loading')}</div>
+              ? <div style={{ fontSize: 14, color: token.textMuted }}>{t('common.loading')}</div>
               : <ReviewView status={status.data} onOpenDiff={(path) => { openPanelTab('diff', path) }} />
           )}
           {active?.kind === 'files' && (

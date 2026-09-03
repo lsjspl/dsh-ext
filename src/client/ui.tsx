@@ -214,13 +214,13 @@ export const rowStyle: CSSProperties = {
   ...buttonStyle,
   display: 'flex',
   width: '100%',
-  gap: 6,
+  gap: 7,
   alignItems: 'center',
   border: 'none',
   background: 'transparent',
   textAlign: 'left',
-  padding: '4px 6px',
-  fontSize: 13,
+  padding: '5px 6px',
+  fontSize: 15,
 }
 
 /**

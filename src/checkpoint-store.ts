@@ -1,5 +1,6 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { git, hasGit, splitNul } from './git.ts'
 import { workspaceKey } from './paths.ts'
 import type { CheckpointRow } from './shared/api-contract.ts'
@@ -368,6 +369,70 @@ export class CheckpointStore {
     return result.ok ? result.stdout.trim() : undefined
   }
 
+  /**
+   * Every turn ref of one session in ONE git call: turn number → checkpoint id.
+   *
+   * The per-turn diff needs two lookups (this turn's checkpoint and the next
+   * turn-with-a-checkpoint as its boundary), and probing turn numbers one by
+   * one costs a process spawn apiece — dozens per request on the poll path.
+   * One `for-each-ref` under the session's ref namespace answers both.
+   */
+  async turnRefs(workTree: string, sessionId: string, signal?: AbortSignal): Promise<Map<number, string>> {
+    const repo = this.repoFor(workTree)
+    const prefix = `refs/dsh-turns/${workspaceKey(sessionId)}/`
+    const result = await git(
+      ['for-each-ref', '--format=%(refname) %(objectname)', prefix],
+      { cwd: workTree, env: this.env(repo), signal },
+    )
+    const refs = new Map<number, string>()
+    if (!result.ok) return refs
+    for (const line of result.stdout.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed.length === 0) continue
+      const space = trimmed.lastIndexOf(' ')
+      if (space <= 0) continue
+      const turn = Number.parseInt(trimmed.slice(prefix.length, space), 10)
+      const id = trimmed.slice(space + 1)
+      if (Number.isSafeInteger(turn) && /^[0-9a-f]{40}$/.test(id)) refs.set(turn, id)
+    }
+    return refs
+  }
+
+  /**
+   * Record the session-log position captured with this checkpoint, so a chat
+   * fork can return the conversation to the same moment. One small JSON index
+   * per workspace in the shadow GIT_DIR: private by construction, and the
+   * checkpoint ids it names are already retained by the turn refs.
+   */
+  async linkAnchor(workTree: string, sessionId: string, checkpointId: string, anchorSeq: number): Promise<void> {
+    const repo = this.repoFor(workTree)
+    const file = join(repo.gitDir, 'dsh-turn-anchors', `${workspaceKey(sessionId)}.json`)
+    await mkdir(dirname(file), { recursive: true, mode: 0o700 })
+    let index: Record<string, { anchorSeq: number }> = {}
+    try {
+      index = JSON.parse(await readFile(file, 'utf8')) as typeof index
+    } catch { /* first anchor for this workspace */ }
+    // First writer wins: a later tool in the same turn must not move the
+    // conversation anchor away from the moment before the first mutation.
+    if (index[checkpointId] === undefined) {
+      index[checkpointId] = { anchorSeq }
+      await writeFileAtomic(file, `${JSON.stringify(index, null, 2)}\n`, { mode: 0o600 })
+    }
+  }
+
+  /** The recorded session-log position for one checkpoint, if any. */
+  async resolveAnchor(workTree: string, sessionId: string, checkpointId: string): Promise<number | undefined> {
+    const repo = this.repoFor(workTree)
+    try {
+      const file = join(repo.gitDir, 'dsh-turn-anchors', `${workspaceKey(sessionId)}.json`)
+      const index = JSON.parse(await readFile(file, 'utf8')) as Record<string, { anchorSeq?: unknown }>
+      const anchorSeq = index[checkpointId]?.anchorSeq
+      return typeof anchorSeq === 'number' ? anchorSeq : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   /** Paths one checkpoint would change, and which of those the user's git does not hold. */
   async preview(workTree: string, checkpointId: string, signal?: AbortSignal): Promise<{ affected: string[]; unprotected: string[] }> {
     const repo = this.repoFor(workTree)
@@ -383,6 +448,81 @@ export class CheckpointStore {
     const tracked = await git(['ls-files', '-z', '--', ...affected], { cwd: workTree })
     const known = new Set(tracked.ok ? splitNul(tracked.stdout) : [])
     return { affected, unprotected: affected.filter(path => !known.has(path)) }
+  }
+
+  /**
+   * The files one turn changed, with line counts.
+   *
+   * A turn's changes are the delta between the checkpoint taken before its
+   * first mutation and the next boundary — the next turn-with-a-checkpoint's
+   * pre-mutation state, or, for the newest turn, the working tree as it is now.
+   *
+   * The working-tree side needs untracked files included, and `git diff
+   * <commit>` cannot see a file no index has ever staged. Rather than staging
+   * into the live shadow index (a mutation with snapshot-ordering side
+   * effects), a throwaway index seeds from the checkpoint, `add --all` updates
+   * it in place, and `write-tree` yields the tree to diff against. The real
+   * index, HEAD, and the branch are untouched; the only residue is unreferenced
+   * blobs, which this repository's disabled gc makes harmless.
+   */
+  async turnChanges(
+    workTree: string,
+    refs: ReadonlyMap<number, string>,
+    turn: number,
+    signal?: AbortSignal,
+  ): Promise<{ files: { path: string; added: number; removed: number }[]; added: number; removed: number } | undefined> {
+    const from = refs.get(turn)
+    if (from === undefined) return undefined
+    const repo = this.repoFor(workTree)
+    const env = this.env(repo)
+
+    // The next recorded turn is this turn's "after" state: turns with no
+    // mutations have no checkpoint, and skipping them is right because their
+    // delta is empty. The refs map answers in one call what used to be a
+    // per-turn probe walk.
+    let boundary: string | undefined
+    for (const later of [...refs.keys()].sort((a, b) => a - b)) {
+      if (later > turn) { boundary = refs.get(later); break }
+    }
+
+    let to = boundary
+    if (to === undefined) {
+      const tempIndex = join(repo.gitDir, `dsh-turn-index-${process.pid}`)
+      try {
+        const tempEnv = { ...env, GIT_INDEX_FILE: tempIndex }
+        const seeded = await git(['read-tree', from], { cwd: workTree, env: tempEnv, signal })
+        if (!seeded.ok) return { files: [], added: 0, removed: 0 }
+        await git(['add', '--all', '.'], { cwd: workTree, env: tempEnv, signal })
+        const written = await git(['write-tree'], { cwd: workTree, env: tempEnv, signal })
+        if (written.ok) to = written.stdout.trim()
+      } finally {
+        await rm(`${tempIndex}.lock`, { force: true }).catch(() => { /* best effort */ })
+        await rm(tempIndex, { force: true }).catch(() => { /* best effort */ })
+      }
+    }
+    if (to === undefined) return { files: [], added: 0, removed: 0 }
+
+    const stat = await git(
+      ['diff', '--numstat', '-z', '--no-renames', '--no-color', from, to],
+      { cwd: workTree, env, signal },
+    )
+    if (!stat.ok) return { files: [], added: 0, removed: 0 }
+
+    // `-z` numstat records: `added\tremoved\tpath\0`, with `-` for binary counts.
+    const files: { path: string; added: number; removed: number }[] = []
+    let added = 0
+    let removed = 0
+    for (const record of stat.stdout.split('\0')) {
+      if (record.trim().length === 0) continue
+      const [a, r, path] = record.split('\t')
+      if (path === undefined) continue
+      const addCount = a === '-' ? 0 : Number.parseInt(a ?? '0', 10)
+      const removeCount = r === '-' ? 0 : Number.parseInt(r ?? '0', 10)
+      files.push({ path, added: Number.isFinite(addCount) ? addCount : 0, removed: Number.isFinite(removeCount) ? removeCount : 0 })
+      added += Number.isFinite(addCount) ? addCount : 0
+      removed += Number.isFinite(removeCount) ? removeCount : 0
+    }
+    return { files, added, removed }
   }
 
   /**
