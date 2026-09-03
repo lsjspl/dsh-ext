@@ -23,7 +23,7 @@ export const en = {
   'tab.review': 'Review',
   'tab.files': 'Files',
   'tab.sessions': 'Sessions',
-  'tab.plugins': 'Plugins',
+  'tab.plugins': 'Fault Rescue',
 
   // Balance extras
   'balance.peak': 'Peak',
@@ -45,8 +45,8 @@ export const en = {
   'section.explorer.desc': 'The workspace directory tree and its uncommitted changes. Read-only: every git command behind it is a query.',
   'section.sessions': 'Sessions',
   'section.sessions.desc': 'The recycle bin is in the sidebar foot, beside Settings. Turning session administration off hides the bin and lets undo/edit leave the original session in place.',
-  'section.plugins': 'Plugin safety',
-  'section.plugins.desc': 'Quarantine a plugin so the next start skips it. Includes the rescue command for a harness that will not boot at all.',
+  'section.plugins': 'Fault Rescue',
+  'section.plugins.desc': 'Manage plugin quarantines and standalone rescue commands to recover from startup failures.',
   'section.checkpoints': 'Checkpoints',
   'section.checkpoints.desc': 'Per-session rollback through a shadow git repository. Your project\'s own git history, index, and stashes are never touched.',
 
@@ -272,7 +272,7 @@ export const en = {
   'plugins.quarantinedCount': '{n} plugin(s) are quarantined and will not load on the next start.',
   'plugins.enable': 'Enable',
   'plugins.disable': 'Disable',
-  'plugins.rescueTitle': 'Emergency Recovery',
+  'plugins.rescueTitle': 'Fault Rescue Mechanism',
   'plugins.rescueBody': 'When a third-party plugin causes Harness startup to fail, use these recovery mechanisms:',
   'plugins.rescueWebTitle': '1. Web Boot Error Rescue (In-Browser)',
   'plugins.rescueWebDesc': 'If frontend plugin boot gets stuck on the error card, an emergency panel appears automatically to quarantine the faulty plugin or enter Safe Mode with one click.',
@@ -353,7 +353,7 @@ export const zh: Record<LocaleKey, string> = {
   'tab.review': '审查',
   'tab.files': '文件',
   'tab.sessions': '会话',
-  'tab.plugins': '插件',
+  'tab.plugins': '故障救援',
 
   // Balance extras
   'balance.peak': '高峰',
@@ -375,8 +375,8 @@ export const zh: Record<LocaleKey, string> = {
   'section.explorer.desc': '工作区目录树与未提交的改动。只读：背后每条 git 命令都是查询。',
   'section.sessions': '会话',
   'section.sessions.desc': '回收站在侧栏底部、「设置」旁边。关闭会话管理会隐藏回收站，撤销/编辑时原会话也会留在列表里。',
-  'section.plugins': '插件安全',
-  'section.plugins.desc': '隔离某个插件，下次启动就会跳过它。也包含 harness 完全起不来时的救援命令。',
+  'section.plugins': '故障救援',
+  'section.plugins.desc': '管理插件隔离名单与故障自愈命令，确保 Harness 在任何情况下都能安全启动。',
   'section.checkpoints': '检查点',
   'section.checkpoints.desc': '通过影子 git 仓库做按会话回滚。你项目自己的 git 历史、索引和 stash 绝不会被触碰。',
 
@@ -593,7 +593,7 @@ export const zh: Record<LocaleKey, string> = {
   'plugins.enable': '启用',
   'plugins.disable': '禁用',
   'plugins.enableAll': '启用所有被隔离的插件',
-  'plugins.rescueTitle': '应急故障救援机制',
+  'plugins.rescueTitle': '故障救援机制',
   'plugins.rescueBody': '当第三方插件异常导致系统启动失败时，可通过以下脱困方案快速恢复：',
   'plugins.rescueWebTitle': '1. 网页引导错误页急救（开箱即用）',
   'plugins.rescueWebDesc': '若前端加载插件停滞在错误引导页，页面会自动呼出急救面板，支持在浏览器中一键隔离故障插件或开启安全模式。',

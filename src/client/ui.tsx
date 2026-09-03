@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
+import { useT } from './use-locale.ts'
 
 /**
  * The Web client routes every colour through `--dsw-alias-*` custom properties
@@ -26,19 +27,23 @@ export const token = {
   /** Primary body text. */
   text: 'var(--dsw-alias-label-primary, currentColor)',
   /** Secondary text: labels, values beside a primary line. */
-  textSecondary: 'var(--dsw-alias-label-secondary, color-mix(in srgb, currentColor 80%, transparent))',
+  textSecondary: 'var(--dsw-alias-label-secondary, currentColor)',
   /** De-emphasized text: hints, timestamps, counts. */
-  textMuted: 'var(--dsw-alias-label-caption, color-mix(in srgb, currentColor 60%, transparent))',
+  textMuted: 'var(--dsw-alias-label-tertiary, var(--dsw-alias-label-caption, color-mix(in srgb, currentColor 60%, transparent)))',
   /** Hairline borders and dividers. */
-  border: 'var(--dsw-alias-border-l2, color-mix(in srgb, currentColor 20%, transparent))',
+  border: 'var(--dsw-alias-border-l2, color-mix(in srgb, currentColor 14%, transparent))',
   /** Slightly raised surface, for cards and inputs. */
   surface: 'var(--dsw-alias-bg-layer-2, transparent)',
+  /** Higher layer surface (e.g. for card background). */
+  surfaceRaised: 'var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-2, transparent))',
+  /** Module platform background (subtle secondary panel). */
+  surfaceModule: 'var(--dsw-alias-bg-module-platform, color-mix(in srgb, currentColor 4%, transparent))',
   /** Recessed page background. */
   surfaceBase: 'var(--dsw-alias-bg-base, transparent)',
   /** Hover wash for rows and buttons. */
-  hover: 'var(--dsw-alias-interactive-bg-hover, color-mix(in srgb, currentColor 8%, transparent))',
+  hover: 'var(--dsw-alias-interactive-bg-hover, color-mix(in srgb, currentColor 6%, transparent))',
   /** Accent, for links and the active state. */
-  accent: 'var(--dsw-alias-brand-primary, currentColor)',
+  accent: 'var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary, #2563eb))',
   /** Destructive and error. */
   danger: 'var(--dsw-alias-state-error-primary, #f25a5a)',
   /** Caution. */
@@ -47,51 +52,138 @@ export const token = {
   success: 'var(--dsw-alias-state-success-primary, #22c55e)',
 } as const
 
-export function Section(props: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {
+export function Section(props: {
+  title: string
+  description?: string
+  action?: ReactNode
+  onReset?: () => void
+  children: ReactNode
+}) {
+  const t = useT()
   return (
     <section
-      data-dsh-plugin="dsh-dev-tool-ext"
+      data-dsh-plugin="dsh-ext"
       data-dsh-part="section"
-      style={{ padding: '18px 0 20px', color: token.text }}
+      style={{
+        margin: '0 0 18px',
+        color: token.text,
+        background: 'var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, transparent))',
+        border: `1px solid ${token.border}`,
+        borderRadius: 10,
+        overflow: 'hidden',
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)',
+      }}
     >
       <div
         data-dsh-part="section-header"
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 14,
-          padding: '10px 12px',
-          borderLeft: `3px solid ${token.accent}`,
-          background: token.hover,
+          justifyContent: 'space-between',
+          gap: 16,
+          padding: '13px 18px',
+          borderBottom: `1px solid ${token.border}`,
+          background: 'var(--dsw-alias-bg-module-platform, var(--dsw-alias-bg-layer-3, rgba(125, 125, 125, 0.1)))',
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h3 style={{ margin: 0, fontSize: 15, lineHeight: 1.35, fontWeight: 600, color: token.text }}>
-            {props.title}
-          </h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <span
+              aria-hidden="true"
+              style={{
+                display: 'inline-block',
+                width: 3.5,
+                height: 14,
+                borderRadius: 2,
+                background: 'var(--dsw-alias-state-business-primary, #2563eb)',
+                flexShrink: 0,
+              }}
+            />
+            <h3 style={{ margin: 0, fontSize: 14.5, lineHeight: 1.4, fontWeight: 600, color: token.text, letterSpacing: '0.01em' }}>
+              {props.title}
+            </h3>
+          </div>
           {props.description !== undefined && (
-            <p style={{ margin: '4px 0 0', fontSize: 11, lineHeight: 1.5, color: token.textMuted }}>
+            <p style={{ margin: '4px 0 0 12.5px', fontSize: 12, lineHeight: 1.5, color: token.textMuted }}>
               {props.description}
             </p>
           )}
         </div>
-        {props.action !== undefined && <div style={{ flex: '0 0 auto', alignSelf: 'flex-start', paddingTop: 1 }}>{props.action}</div>}
+        <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {props.onReset !== undefined && (
+            <button
+              type="button"
+              onClick={props.onReset}
+              title={t('common.reset')}
+              style={{
+                appearance: 'none',
+                background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))',
+                border: `1px solid ${token.border}`,
+                borderRadius: 14,
+                padding: '3px 10px',
+                fontSize: 12,
+                lineHeight: '16px',
+                fontWeight: 500,
+                color: token.textMuted,
+                cursor: 'pointer',
+                transition: 'all 120ms ease',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.color = token.text
+                e.currentTarget.style.borderColor = 'var(--dsw-alias-border-l1, rgba(125,125,125,0.4))'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.color = token.textMuted
+                e.currentTarget.style.borderColor = token.border
+              }}
+            >
+              {t('common.reset')}
+            </button>
+          )}
+          {props.action !== undefined && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 9,
+                padding: '3px 8px 3px 12px',
+                borderRadius: 20,
+                background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))',
+                border: `1px solid ${token.border}`,
+              }}
+            >
+              <span style={{ fontSize: 12, color: token.textSecondary, userSelect: 'none', fontWeight: 500 }}>
+                {t('common.enabled')}
+              </span>
+              {props.action}
+            </div>
+          )}
+        </div>
       </div>
+
+      <style>{`
+        [data-dsh-part="section-items"] > [data-dsh-part="setting-row"]:last-child {
+          border-bottom: none !important;
+        }
+      `}</style>
       <div
         data-dsh-part="section-items"
         style={{
-          marginLeft: 15,
-          paddingLeft: 14,
-          borderLeft: `1px solid ${token.border}`,
+          padding: '2px 18px 4px',
           display: 'flex',
           flexDirection: 'column',
+          background: 'transparent',
         }}
       >
         {props.children}
       </div>
+
     </section>
   )
 }
+
+
+
 
 export function Row(props: { label: string; hint?: string; control: ReactNode }) {
   return (
@@ -100,20 +192,30 @@ export function Row(props: { label: string; hint?: string; control: ReactNode })
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 18,
+        gap: 16,
         justifyContent: 'space-between',
-        minHeight: 42,
-        padding: '9px 4px 9px 0',
-        borderBottom: `1px solid color-mix(in srgb, ${token.border} 55%, transparent)`,
+        minHeight: 44,
+        padding: '10px 0',
+        borderBottom: `1px solid ${token.border}`,
       }}
     >
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 13, lineHeight: 1.35, fontWeight: 500, color: token.text }}>{props.label}</div>
+      <div style={{ minWidth: 0, flex: '1 1 auto' }}>
+        <div style={{ fontSize: 13, lineHeight: 1.4, fontWeight: 500, color: token.text }}>{props.label}</div>
         {props.hint !== undefined && (
-          <div style={{ fontSize: 11, lineHeight: 1.45, color: token.textMuted, marginTop: 3 }}>{props.hint}</div>
+          <div style={{ fontSize: 11.5, lineHeight: 1.45, color: token.textMuted, marginTop: 2 }}>{props.hint}</div>
         )}
       </div>
-      <div style={{ flex: '0 0 auto', maxWidth: '55%' }}>{props.control}</div>
+      <div
+        style={{
+          flex: '0 1 auto',
+          minWidth: 0,
+          maxWidth: '60%',
+          display: 'flex',
+          justifyContent: 'flex-end',
+        }}
+      >
+        {props.control}
+      </div>
     </div>
   )
 }
@@ -132,15 +234,19 @@ export function Toggle(props: { checked: boolean; disabled?: boolean; onChange: 
         position: 'relative',
         display: 'inline-flex',
         alignItems: 'center',
-        width: 36,
-        height: 20,
+        width: 38,
+        height: 22,
         padding: 2,
-        border: `1px solid ${props.checked ? token.accent : token.border}`,
+        border: props.checked
+          ? '1px solid var(--dsw-alias-state-business-primary, #2563eb)'
+          : `1px solid ${token.border}`,
         borderRadius: 999,
-        background: props.checked ? token.accent : token.surface,
+        background: props.checked
+          ? 'var(--dsw-alias-state-business-primary, #2563eb)'
+          : 'var(--dsw-alias-border-l2, color-mix(in srgb, currentColor 18%, transparent))',
         cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.45 : 1,
-        transition: 'background 140ms ease, border-color 140ms ease, opacity 140ms ease',
+        opacity: disabled ? 0.35 : 1,
+        transition: 'background 150ms cubic-bezier(0.4, 0, 0.2, 1), border-color 150ms cubic-bezier(0.4, 0, 0.2, 1)',
         flex: '0 0 auto',
       }}
     >
@@ -148,13 +254,13 @@ export function Toggle(props: { checked: boolean; disabled?: boolean; onChange: 
         aria-hidden="true"
         style={{
           display: 'block',
-          width: 14,
-          height: 14,
+          width: 16,
+          height: 16,
           borderRadius: '50%',
-          background: props.checked ? 'var(--dsw-alias-bg-base, #fff)' : token.textMuted,
-          boxShadow: '0 1px 2px color-mix(in srgb, #000 35%, transparent)',
+          background: '#ffffff',
+          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.25)',
           transform: props.checked ? 'translateX(16px)' : 'translateX(0)',
-          transition: 'transform 140ms ease, background 140ms ease',
+          transition: 'transform 150ms cubic-bezier(0.4, 0, 0.2, 1)',
         }}
       />
     </button>
@@ -163,9 +269,12 @@ export function Toggle(props: { checked: boolean; disabled?: boolean; onChange: 
 
 export function Select<T extends string>(props: {
   value: T
-  options: readonly { value: T; label: string }[]
+  options?: readonly { value: T; label: string }[]
+  groups?: readonly { group: string; options: readonly { value: T; label: string }[] }[]
   disabled?: boolean
   label: string
+  width?: number | string
+  maxWidth?: number | string
   onChange: (next: T) => void
 }) {
   return (
@@ -174,15 +283,46 @@ export function Select<T extends string>(props: {
       disabled={props.disabled === true}
       aria-label={props.label}
       onChange={event => { props.onChange(event.currentTarget.value as T) }}
-      style={{ ...inputStyle, minWidth: 140 }}
+      style={{
+        ...inputStyle,
+        display: 'inline-block',
+        width: props.width ? (typeof props.width === 'number' ? `${props.width}px` : props.width) : 'auto',
+        maxWidth: props.maxWidth ? (typeof props.maxWidth === 'number' ? `${props.maxWidth}px` : props.maxWidth) : '100%',
+        minWidth: 0,
+        boxSizing: 'border-box',
+        textOverflow: 'ellipsis',
+        overflow: 'hidden',
+        whiteSpace: 'nowrap',
+      }}
     >
-      {props.options.map(option => (
-        // A native option list is painted by the OS, which does not read our
-        // tokens; the explicit pair keeps it legible under a dark theme.
-        <option key={option.value} value={option.value} style={{ color: token.text, background: token.surface }}>
-          {option.label}
-        </option>
-      ))}
+
+      {props.groups !== undefined
+        ? props.groups.map(group => (
+            <optgroup
+              key={group.group}
+              label={group.group}
+              style={{ color: token.text, background: token.surface, fontWeight: 600 }}
+            >
+              {group.options.map(option => (
+                <option
+                  key={option.value}
+                  value={option.value}
+                  style={{ color: token.text, background: token.surface, fontWeight: 400 }}
+                >
+                  {option.label}
+                </option>
+              ))}
+            </optgroup>
+          ))
+        : props.options?.map(option => (
+            <option
+              key={option.value}
+              value={option.value}
+              style={{ color: token.text, background: token.surface }}
+            >
+              {option.label}
+            </option>
+          ))}
     </select>
   )
 }
@@ -191,17 +331,23 @@ export const inputStyle: CSSProperties = {
   font: 'inherit',
   fontSize: 12,
   color: token.text,
-  background: token.surface,
+  background: 'var(--dsw-alias-bg-base, transparent)',
   border: `1px solid ${token.border}`,
   borderRadius: 6,
-  padding: '4px 8px',
+  padding: '5px 9px',
+  outline: 'none',
+  boxSizing: 'border-box',
 }
+
 
 export const buttonStyle: CSSProperties = {
   ...inputStyle,
   cursor: 'pointer',
   userSelect: 'none',
+  background: 'var(--dsw-alias-bg-layer-2, color-mix(in srgb, currentColor 5%, transparent))',
 }
+
+
 
 /** One indent step for in-place tree expansion (file tree, review folders). */
 export const INDENT = 14
@@ -263,10 +409,17 @@ export function TextField(props: {
         if (event.key === 'Enter') { event.currentTarget.blur() }
         if (event.key === 'Escape') { setDraft(props.value); setEditing(false) }
       }}
-      style={{ ...inputStyle, width: props.width ?? 180 }}
+      style={{
+        ...inputStyle,
+        width: props.width ? (typeof props.width === 'number' ? `${props.width}px` : props.width) : 180,
+        maxWidth: '100%',
+        minWidth: 0,
+        boxSizing: 'border-box',
+      }}
     />
   )
 }
+
 
 /** A bounded number field. Same commit-on-blur contract as {@link TextField}. */
 export function TextAreaField(props: {
@@ -274,7 +427,7 @@ export function TextAreaField(props: {
   disabled?: boolean
   placeholder?: string
   label: string
-  width?: number
+  width?: number | string
   rows?: number
   onCommit: (next: string) => void
 }) {
@@ -304,7 +457,10 @@ export function TextAreaField(props: {
       }}
       style={{
         ...inputStyle,
-        width: props.width ?? 320,
+        display: 'block',
+        width: props.width !== undefined ? (typeof props.width === 'number' ? `${props.width}px` : props.width) : '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
         resize: 'vertical',
         fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
         lineHeight: 1.45,
@@ -312,6 +468,7 @@ export function TextAreaField(props: {
     />
   )
 }
+
 
 export function NumberField(props: {
   value: number
@@ -352,7 +509,13 @@ export function NumberField(props: {
         if (event.key === 'Enter') { event.currentTarget.blur() }
         if (event.key === 'Escape') { setDraft(String(props.value)); setEditing(false) }
       }}
-      style={{ ...inputStyle, width: 100 }}
+      style={{
+        ...inputStyle,
+        width: 96,
+        maxWidth: '100%',
+        minWidth: 0,
+        boxSizing: 'border-box',
+      }}
     />
   )
 }

@@ -1,16 +1,22 @@
-import { Component, useState } from 'react'
+import { Component, useState, useLayoutEffect, useRef } from 'react'
 import { Notice, NumberField, Row, Section, Select, TextAreaField, TextField, Toggle, buttonStyle, token } from './ui.tsx'
 import { useResource } from './use-resource.ts'
-import { useConfig } from './use-config.ts'
+import { useConfig, type ConfigOp } from './use-config.ts'
 import { BalanceCard } from './BalanceView.tsx'
 import { AuditPanel } from './AuditPanel.tsx'
-import { PluginsPanel } from './PluginsPanel.tsx'
+import { PluginsPanel, RescueBox } from './PluginsPanel.tsx'
 import { EffortsPanel } from './EffortsPanel.tsx'
-import { CheckpointsPanel } from './CheckpointsPanel.tsx'
-import { ExplorerPanel } from './ExplorerPanel.tsx'
 import { useT } from './use-locale.ts'
-import { DEFAULT_DELETE_PATTERNS, DEFAULT_READ_PATTERNS, type CommandReviewFallback, type CommandReviewMode } from '../config.ts'
+import {
+  DEFAULT_CONFIG,
+  DEFAULT_DELETE_PATTERNS,
+  DEFAULT_READ_PATTERNS,
+  type Config,
+  type CommandReviewFallback,
+  type CommandReviewMode,
+} from '../config.ts'
 import type { ReviewModels } from '../shared/api-contract.ts'
+
 
 /**
  * The plugin's settings page: one tab per feature group, the options each
@@ -25,19 +31,36 @@ import type { ReviewModels } from '../shared/api-contract.ts'
 function Disclosure(props: { label: string; children: React.ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(props.defaultOpen === true)
   return (
-    <div style={{ paddingTop: 4 }}>
+    <div style={{ padding: '14px 0 12px' }}>
       <button
         type="button"
         aria-expanded={open}
         onClick={() => { setOpen(!open) }}
-        style={{ ...buttonStyle, fontSize: 11, padding: '2px 8px' }}
+        style={{
+          ...buttonStyle,
+          fontSize: 12,
+          padding: '6px 14px',
+          borderRadius: 6,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 7,
+          background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))',
+          border: `1px solid ${token.border}`,
+          color: token.text,
+          transition: 'all 140ms ease',
+        }}
       >
-        {open ? '▾' : '▸'} {props.label}
+        <span style={{ fontSize: 10, opacity: 0.7, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 120ms ease' }}>
+          &gt;
+        </span>
+        {props.label}
       </button>
-      {open && <div style={{ paddingTop: 8 }}>{props.children}</div>}
+      {open && <div style={{ paddingTop: 12 }}>{props.children}</div>}
     </div>
   )
 }
+
+
 
 const TABS = ['input', 'balance', 'review', 'files', 'sessions', 'plugins'] as const
 
@@ -68,7 +91,7 @@ class SettingsBoundary extends Component<{ children: React.ReactNode }, { failed
   }
 }
 
-/** The tab strip: an underline on the active tab, in the host's own accent. */
+/** The tab strip matching DSH native settings tabs style with smooth sliding indicator. */
 function TabStrip(props: { active: Tab; onSelect: (tab: Tab) => void }) {
   const t = useT()
   const labels: Record<Tab, string> = {
@@ -79,46 +102,151 @@ function TabStrip(props: { active: Tab; onSelect: (tab: Tab) => void }) {
     sessions: t('tab.sessions'),
     plugins: t('tab.plugins'),
   }
+
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const [indicator, setIndicator] = useState<{ left: number; width: number; ready: boolean }>({
+    left: 0,
+    width: 0,
+    ready: false,
+  })
+
+  useLayoutEffect(() => {
+    const el = tabRefs.current[props.active]
+    const container = containerRef.current
+    if (el && container) {
+      const containerRect = container.getBoundingClientRect()
+      const elRect = el.getBoundingClientRect()
+      setIndicator({
+        left: elRect.left - containerRect.left,
+        width: elRect.width,
+        ready: true,
+      })
+    }
+  }, [props.active])
+
   return (
-    <div role="tablist" style={{ display: 'flex', gap: 2, borderBottom: `1px solid ${token.border}`, overflowX: 'auto' }}>
+    <div
+      ref={containerRef}
+      role="tablist"
+      style={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'flex-end',
+        gap: 20,
+        borderBottom: `1px solid ${token.border}`,
+      }}
+    >
       {TABS.map(tab => {
         const active = tab === props.active
         return (
           <button
             key={tab}
+            ref={el => { tabRefs.current[tab] = el }}
             type="button"
             role="tab"
             aria-selected={active}
             onClick={() => { props.onSelect(tab) }}
             style={{
-              ...buttonStyle,
-              border: 'none',
-              borderBottom: `2px solid ${active ? token.accent : 'transparent'}`,
-              borderRadius: 0,
+              appearance: 'none',
               background: 'transparent',
-              padding: '8px 12px',
-              fontSize: 14,
-              lineHeight: 1.4,
-              fontWeight: active ? 500 : 400,
-              whiteSpace: 'nowrap',
+              border: 'none',
+              padding: '8px 4px 10px',
+              fontSize: 13.5,
+              lineHeight: '20px',
+              fontWeight: active ? 600 : 400,
               color: active ? token.text : token.textMuted,
+              cursor: 'pointer',
+              userSelect: 'none',
+              whiteSpace: 'nowrap',
+              transition: 'color 160ms ease',
             }}
           >
             {labels[tab]}
           </button>
         )
       })}
+      {/* Smooth sliding active indicator line */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          bottom: -1,
+          left: 0,
+          height: 2,
+          borderRadius: '2px 2px 0 0',
+          background: 'var(--dsw-alias-state-business-primary, var(--dsw-alias-label-primary, #2563eb))',
+          width: indicator.width,
+          transform: `translateX(${indicator.left}px)`,
+          transition: indicator.ready
+            ? 'transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1), width 240ms cubic-bezier(0.2, 0.8, 0.2, 1)'
+            : 'none',
+          opacity: indicator.ready && indicator.width > 0 ? 1 : 0,
+          pointerEvents: 'none',
+        }}
+      />
     </div>
   )
+}
+
+
+/**
+ * 匹配官方 DeepSeek Flash 模型：
+ * 1. 提供方为官方 (provider.includes('deepseek') 或 provider === 'deepseek-official')
+ * 2. 模型 ID 开头必定是 deepseek
+ * 3. 模型 ID 包含 flash
+ * 4. 若有多个匹配，按最小匹配（字符长度最短的那个，如 deepseek-v4-flash < deepseek-v4-flash-version）
+ */
+function findDefaultOfficialFlash(models: readonly { provider: string; model: string; name: string }[]): { provider: string; model: string } | undefined {
+  const matched = models.filter(m => {
+    const p = m.provider.toLowerCase()
+    const id = m.model.toLowerCase()
+    const isOfficial = p === 'deepseek-official' || p.includes('deepseek')
+    const isDeepSeekPrefix = id.startsWith('deepseek')
+    const hasFlash = id.includes('flash')
+    return isOfficial && isDeepSeekPrefix && hasFlash
+  })
+
+  if (matched.length === 0) return undefined
+  matched.sort((a, b) => a.model.length - b.model.length)
+  return { provider: matched[0].provider, model: matched[0].model }
 }
 
 export function SettingsPage() {
   const t = useT()
   const { view, error, busy, set, setMany } = useConfig()
   const [tab, setTab] = useState<Tab>('input')
+  const [direction, setDirection] = useState<'right' | 'left'>('right')
+
+  const handleSelectTab = (nextTab: Tab) => {
+    if (nextTab === tab) return
+    const prevIdx = TABS.indexOf(tab)
+    const nextIdx = TABS.indexOf(nextTab)
+    setDirection(nextIdx > prevIdx ? 'right' : 'left')
+    setTab(nextTab)
+  }
+
   // The reviewer model picker's rows. Read unconditionally (a hook), used only
   // by the review tab: one dropdown over every model the live routes advertise.
   const reviewModels = useResource<ReviewModels>('/review/models')
+
+  // 当可用模型列表加载后，若当前配置不在列表中，自动最小匹配官方 deepseek flash
+  useLayoutEffect(() => {
+    if (view && reviewModels.data?.models && reviewModels.data.models.length > 0) {
+      const currentValid = reviewModels.data.models.some(
+        m => m.provider === view.value.commandReview.provider && m.model === view.value.commandReview.model
+      )
+      if (!currentValid) {
+        const best = findDefaultOfficialFlash(reviewModels.data.models)
+        if (best) {
+          setMany([
+            { path: ['commandReview', 'provider'], value: best.provider },
+            { path: ['commandReview', 'model'], value: best.model },
+          ])
+        }
+      }
+    }
+  }, [view, reviewModels.data?.models])
 
   if (view === undefined) {
     return (
@@ -132,27 +260,86 @@ export function SettingsPage() {
   const disabled = busy || !view.writable
   const currentModelKey = `${c.commandReview.provider}::${c.commandReview.model}`
 
+
+  const resetSection = (key: keyof Config) => {
+    if (disabled) return
+    const defaults = { ...DEFAULT_CONFIG[key] }
+    if (key === 'commandReview' && reviewModels.data?.models) {
+      const best = findDefaultOfficialFlash(reviewModels.data.models)
+      if (best) {
+        ;(defaults as any).provider = best.provider
+        ;(defaults as any).model = best.model
+      }
+    }
+    const ops: ConfigOp[] = Object.entries(defaults).map(([subKey, value]) => ({
+      path: [key, subKey],
+      value,
+    }))
+    setMany(ops)
+  }
+
+
   return (
-    <div style={{ padding: '0 4px 24px', color: token.text }} data-dsh-plugin="dsh-ext">
+    <div style={{ padding: '0 4px 28px', color: token.text }} data-dsh-plugin="dsh-ext">
       {!view.writable && (
-        <div style={{ paddingTop: 12 }}>
+        <div style={{ paddingTop: 10 }}>
           <Notice kind="info">
             {t('common.readonly')}
           </Notice>
         </div>
       )}
       {error !== undefined && (
-        <div style={{ paddingTop: 12 }}>
+        <div style={{ paddingTop: 10 }}>
           <Notice kind="error">{error}</Notice>
         </div>
       )}
 
-      <div style={{ paddingTop: 8 }}>
-        <TabStrip active={tab} onSelect={setTab} />
+      <div
+        data-dsh-part="settings-sticky-header"
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 30,
+          background: 'var(--dsw-alias-bg-base, var(--dsw-alias-bg-layer-1, #121214))',
+          margin: '0 -4px',
+          padding: '8px 4px 0',
+        }}
+      >
+        <TabStrip active={tab} onSelect={handleSelectTab} />
       </div>
 
-      <div style={{ paddingTop: 12, paddingLeft: 8 }}>
-        <SettingsBoundary>
+      <style>{`
+        @keyframes dsh-tab-from-right {
+          from {
+            opacity: 0;
+            transform: translateX(18px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+        @keyframes dsh-tab-from-left {
+          from {
+            opacity: 0;
+            transform: translateX(-18px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+      `}</style>
+      <div style={{ overflowX: 'clip', minHeight: 380, paddingTop: 14 }}>
+        <div
+          key={tab}
+          style={{
+            animation: `${direction === 'right' ? 'dsh-tab-from-right' : 'dsh-tab-from-left'} 200ms cubic-bezier(0.16, 1, 0.3, 1) both`,
+            willChange: 'transform, opacity',
+          }}
+        >
+          <SettingsBoundary>
+
         {tab === 'input' && (
           <>
             <Section
@@ -160,6 +347,7 @@ export function SettingsPage() {
               description={t('section.images.desc')}
               action={<Toggle label={t('section.images')} checked={c.imageComposer.enabled} disabled={disabled}
                 onChange={next => { set(['imageComposer', 'enabled'], next) }} />}
+              onReset={() => { resetSection('imageComposer') }}
             >
               <Row
                 label={t('images.button')} hint={t('images.button.hint')}
@@ -179,6 +367,7 @@ export function SettingsPage() {
               description={t('section.effort.desc')}
               action={<Toggle label={t('section.effort')} checked={c.reasoningEffort.enabled} disabled={disabled}
                 onChange={next => { set(['reasoningEffort', 'enabled'], next) }} />}
+              onReset={() => { resetSection('reasoningEffort') }}
             >
               <Row
                 label={t('effort.defaultFull')} hint={t('effort.defaultFull.hint')}
@@ -195,7 +384,11 @@ export function SettingsPage() {
               </Disclosure>
             </Section>
 
-            <Section title={t('section.modelPicker')} description={t('section.modelPicker.desc')}>
+            <Section
+              title={t('section.modelPicker')}
+              description={t('section.modelPicker.desc')}
+              onReset={() => { resetSection('modelPicker') }}
+            >
               <Row
                 label={t('modelPicker.collapse')}
                 hint={t('modelPicker.collapse.hint')}
@@ -212,6 +405,7 @@ export function SettingsPage() {
             description={t('section.balance.desc')}
             action={<Toggle label={t('section.balance')} checked={c.deepseekBalance.enabled} disabled={disabled}
               onChange={next => { set(['deepseekBalance', 'enabled'], next) }} />}
+            onReset={() => { resetSection('deepseekBalance') }}
           >
             <Row
               label={t('balance.badge')} hint={t('balance.badge.hint')}
@@ -222,9 +416,6 @@ export function SettingsPage() {
               label={t('balance.poll')} hint={t('balance.poll.hint')}
               control={<NumberField
                 label={t('balance.poll')}
-                // `?? defaults` throughout: a running backend that predates
-                // these fields answers without them, and a hard read would
-                // crash the whole settings section blank.
                 value={c.deepseekBalance.pollSeconds ?? 30}
                 min={0} max={600} step={5}
                 disabled={disabled || !c.deepseekBalance.enabled}
@@ -254,125 +445,256 @@ export function SettingsPage() {
         )}
 
         {tab === 'review' && (
-          <Section
-            title={t('section.review')}
-            description={t('section.review.desc')}
-            action={<Toggle label={t('section.review')} checked={c.commandReview.enabled} disabled={disabled}
-              onChange={next => { set(['commandReview', 'enabled'], next) }} />}
-          >
-            <Row
-              label={t('review.mode')}
-              control={<Select<CommandReviewMode>
-                label={t('review.mode')} value={c.commandReview.mode} disabled={disabled || !c.commandReview.enabled}
-                onChange={next => { set(['commandReview', 'mode'], next) }}
-                options={[
-                  { value: 'rules-only', label: t('review.mode.rules') },
-                  { value: 'rules+llm', label: t('review.mode.rulesLlm') },
-                  { value: 'all', label: t('review.mode.all') },
-                ]} />}
-            />
-            <Row
-              label={t('review.writeOnly')} hint={t('review.writeOnly.hint')}
-              control={<Toggle label={t('review.writeOnly')} checked={c.commandReview.writeOnly ?? true} disabled={disabled || !c.commandReview.enabled}
-                onChange={next => { set(['commandReview', 'writeOnly'], next) }} />}
-            />
-            <Row
-              label={t('review.absoluteDelete')} hint={t('review.absoluteDelete.hint')}
-              control={<Toggle label={t('review.absoluteDelete')} checked={c.commandReview.absoluteDenyDelete ?? true} disabled={disabled || !c.commandReview.enabled}
-                onChange={next => { set(['commandReview', 'absoluteDenyDelete'], next) }} />}
-            />
-            <Row
-              label={t('review.modelPick')} hint={t('review.modelPick.hint')}
-              control={(() => {
-                // One dropdown over the configured routes; choosing a row sets
-                // provider and model together, in one fenced write. A stored
-                // choice whose route is dormant stays visible at the top.
-                const options = reviewModels.data?.models.map(row => ({
-                  value: `${row.provider}::${row.model}`,
-                  label: row.name === row.model ? `${row.name} · ${row.provider}` : `${row.name} · ${row.provider} / ${row.model}`,
-                })) ?? []
-                if (!options.some(option => option.value === currentModelKey)) {
-                  options.unshift({ value: currentModelKey, label: `${c.commandReview.model} · ${c.commandReview.provider}` })
-                }
-                if (options.length <= 1) {
-                  return <span style={{ fontSize: 11, color: token.textMuted }}>{currentModelKey}</span>
-                }
-                return <Select
-                  label={t('review.modelPick')} value={currentModelKey} disabled={disabled || !c.commandReview.enabled}
-                  onChange={next => {
-                    const separator = next.indexOf('::')
-                    setMany([
-                      { path: ['commandReview', 'provider'], value: next.slice(0, separator) },
-                      { path: ['commandReview', 'model'], value: next.slice(separator + 2) },
-                    ])
+          <>
+            {/* 1. 审核模式与模型策略 */}
+            <Section
+              title={t('section.review')}
+              description={t('section.review.desc')}
+              action={<Toggle label={t('section.review')} checked={c.commandReview.enabled} disabled={disabled}
+                onChange={next => { set(['commandReview', 'enabled'], next) }} />}
+              onReset={() => { resetSection('commandReview') }}
+            >
+              <div style={{ padding: '6px 0 14px' }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: token.text, marginBottom: 8 }}>
+                  审核模式
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
+                  {([
+                    {
+                      value: 'rules+llm' as const,
+                      title: '规则初筛 + 模型复审',
+                      desc: '先用本地轻量正则规则秒级初筛，命中可疑指令后再交给大模型深度分析判定。兼顾高安全性与低 API 消耗。',
+                      tag: '推荐',
+                    },
+                    {
+                      value: 'rules-only' as const,
+                      title: '仅本地规则拦截',
+                      desc: '纯离线阻断。完全依据本地正则表达式黑白名单进行拦截或放行，不调用任何第二模型，零额外 Token 消耗、零延迟。',
+                    },
+                    {
+                      value: 'all' as const,
+                      title: '全量模型审查',
+                      desc: '最高防护级别。将覆盖范围内的每一个工具调用无差别提交给大模型进行语义审核裁决，适合极其严苛的安全场景。',
+                    },
+                  ]).map(m => {
+                    const isSelected = c.commandReview.mode === m.value
+                    return (
+                      <div
+                        key={m.value}
+                        onClick={() => {
+                          if (!disabled && c.commandReview.enabled) {
+                            set(['commandReview', 'mode'], m.value)
+                          }
+                        }}
+                        style={{
+                          border: isSelected
+                            ? '1.5px solid var(--dsw-alias-state-business-primary, #2563eb)'
+                            : `1px solid ${token.border}`,
+                          borderRadius: 8,
+                          padding: '12px 14px',
+                          background: isSelected
+                            ? 'var(--dsw-alias-bg-layer-2, rgba(37, 99, 235, 0.06))'
+                            : 'var(--dsw-alias-bg-layer-1, transparent)',
+                          cursor: disabled || !c.commandReview.enabled ? 'default' : 'pointer',
+                          transition: 'all 120ms ease',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6,
+                          userSelect: 'none',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: isSelected ? 'var(--dsw-alias-state-business-primary, #2563eb)' : token.text,
+                          }}>
+                            {m.title}
+                          </span>
+                          {m.tag && (
+                            <span style={{
+                              fontSize: 10,
+                              fontWeight: 600,
+                              padding: '1px 6px',
+                              borderRadius: 10,
+                              background: 'var(--dsw-alias-state-business-primary, #2563eb)',
+                              color: '#fff',
+                            }}>
+                              {m.tag}
+                            </span>
+                          )}
+                        </div>
+                        <p style={{ margin: 0, fontSize: 11.5, color: token.textMuted, lineHeight: 1.5 }}>
+                          {m.desc}
+                        </p>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {c.commandReview.mode !== 'rules-only' && (
+                <>
+                  <Row
+                    label={t('review.modelPick')} hint={t('review.modelPick.hint')}
+                    control={(() => {
+                      const list = reviewModels.data?.models ?? []
+                      const map = new Map<string, { value: string; label: string }[]>()
+                      for (const row of list) {
+                        const groupName = row.provider
+                        if (!map.has(groupName)) {
+                          map.set(groupName, [])
+                        }
+                        map.get(groupName)!.push({
+                          value: `${row.provider}::${row.model}`,
+                          label: row.name || row.model,
+                        })
+                      }
+
+                      // Ensure current selection is present in its provider group if dormant
+                      if (currentModelKey) {
+                        const separator = currentModelKey.indexOf('::')
+                        const p = separator >= 0 ? currentModelKey.slice(0, separator) : c.commandReview.provider
+                        const m = separator >= 0 ? currentModelKey.slice(separator + 2) : c.commandReview.model
+                        const currentGroup = map.get(p)
+                        if (currentGroup) {
+                          if (!currentGroup.some(item => item.value === currentModelKey)) {
+                            currentGroup.unshift({ value: currentModelKey, label: m })
+                          }
+                        } else {
+                          map.set(p, [{ value: currentModelKey, label: m }])
+                        }
+                      }
+
+                      const groups = Array.from(map.entries()).map(([group, options]) => ({
+                        group,
+                        options,
+                      }))
+
+                      return (
+                        <Select
+                          label={t('review.modelPick')}
+                          value={currentModelKey}
+                          disabled={disabled || !c.commandReview.enabled}
+                          onChange={next => {
+                            const separator = next.indexOf('::')
+                            setMany([
+                              { path: ['commandReview', 'provider'], value: next.slice(0, separator) },
+                              { path: ['commandReview', 'model'], value: next.slice(separator + 2) },
+                            ])
+                          }}
+                          width={220}
+                          maxWidth="100%"
+                          groups={groups}
+                        />
+                      )
+                    })()}
+                  />
+                  <Row
+                    label={t('review.timeout')}
+                    hint={t('review.timeout.hint')}
+                    control={<NumberField
+                      label={t('review.timeout')}
+                      value={c.commandReview.timeoutMs}
+                      min={1000} max={120000} step={500}
+                      disabled={disabled || !c.commandReview.enabled}
+                      onCommit={next => { set(['commandReview', 'timeoutMs'], next) }} />}
+                  />
+                  <Row
+                    label={t('review.onFailure')}
+                    hint={t('review.onFailure.hint')}
+                    control={<Select<CommandReviewFallback>
+                      label={t('review.onFailure')} value={c.commandReview.onFailure} disabled={disabled || !c.commandReview.enabled}
+                      onChange={next => { set(['commandReview', 'onFailure'], next) }}
+                      options={[
+                        { value: 'ask', label: t('review.onFailure.ask') },
+                        { value: 'deny', label: t('review.onFailure.deny') },
+                        { value: 'allow', label: t('review.onFailure.allow') },
+                      ]} />}
+                  />
+                </>
+              )}
+            </Section>
+
+            {/* 2. 命令拦截与放行策略 */}
+            <Section
+              title="过滤与阻断策略"
+              description="在调用审查前进行前置规则过滤，可跳过只读查询或直接拒绝危险删除操作。"
+            >
+              <Row
+                label={t('review.writeOnly')} hint={t('review.writeOnly.hint')}
+                control={<Toggle label={t('review.writeOnly')} checked={c.commandReview.writeOnly ?? true} disabled={disabled || !c.commandReview.enabled}
+                  onChange={next => { set(['commandReview', 'writeOnly'], next) }} />}
+              />
+              <Row
+                label={t('review.absoluteDelete')} hint={t('review.absoluteDelete.hint')}
+                control={<Toggle label={t('review.absoluteDelete')} checked={c.commandReview.absoluteDenyDelete ?? true} disabled={disabled || !c.commandReview.enabled}
+                  onChange={next => { set(['commandReview', 'absoluteDenyDelete'], next) }} />}
+              />
+              <Row
+                label={t('review.tools')}
+                hint={t('review.tools.hint')}
+                control={<TextField
+                  label={t('review.tools')}
+                  value={(c.commandReview.tools ?? ['bash', 'pwsh', 'run_command']).join(', ')}
+                  width={220}
+                  disabled={disabled || !c.commandReview.enabled}
+                  onCommit={next => {
+                    const tools = next.split(',').map(s => s.trim()).filter(Boolean)
+                    set(['commandReview', 'tools'], tools)
                   }}
-                  options={options} />
-              })()}
-            />
-            <Row
-              label={t('review.timeout')}
-              hint={t('review.timeout.hint')}
-              control={<NumberField
-                label={t('review.timeout')}
-                value={c.commandReview.timeoutMs}
-                min={1000} max={120000} step={500}
-                disabled={disabled || !c.commandReview.enabled}
-                onCommit={next => { set(['commandReview', 'timeoutMs'], next) }} />}
-            />
-            <Row
-              label={t('review.onFailure')}
-              hint={t('review.onFailure.hint')}
-              control={<Select<CommandReviewFallback>
-                label={t('review.onFailure')} value={c.commandReview.onFailure} disabled={disabled || !c.commandReview.enabled}
-                onChange={next => { set(['commandReview', 'onFailure'], next) }}
-                options={[
-                  { value: 'ask', label: t('review.onFailure.ask') },
-                  { value: 'deny', label: t('review.onFailure.deny') },
-                  { value: 'allow', label: t('review.onFailure.allow') },
-                ]} />}
-            />
-            <Row
-              label={t('review.tools')}
-              hint={t('review.tools.hint')}
-              control={<span style={{ fontSize: 11, color: token.textMuted }}>{c.commandReview.tools.join(', ')}</span>}
-            />
-            <Row
-              label={t('review.denyPatterns')} hint={t('review.denyPatterns.hint')}
-              control={<TextAreaField
-                label={t('review.denyPatterns')}
-                value={c.commandReview.denyPatterns.join('\n')}
-                disabled={disabled || !c.commandReview.enabled}
-                rows={7}
-                onCommit={next => {
-                  set(['commandReview', 'denyPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
-                }} />}
-            />
-            <Row
-              label={t('review.readPatterns')} hint={t('review.readPatterns.hint')}
-              control={<TextAreaField
-                label={t('review.readPatterns')}
-                value={(c.commandReview.readPatterns ?? DEFAULT_READ_PATTERNS).join('\n')}
-                disabled={disabled || !c.commandReview.enabled || !(c.commandReview.writeOnly ?? true)}
-                rows={5}
-                onCommit={next => {
-                  set(['commandReview', 'readPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
-                }} />}
-            />
-            <Row
-              label={t('review.deletePatterns')} hint={t('review.deletePatterns.hint')}
-              control={<TextAreaField
-                label={t('review.deletePatterns')}
-                value={(c.commandReview.deletePatterns ?? DEFAULT_DELETE_PATTERNS).join('\n')}
-                disabled={disabled || !c.commandReview.enabled || !(c.commandReview.absoluteDenyDelete ?? true)}
-                rows={7}
-                onCommit={next => {
-                  set(['commandReview', 'deletePatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
-                }} />}
-            />
-            <Disclosure label={t('review.verdicts')}>
-              <AuditPanel enabled={c.commandReview.enabled} />
-            </Disclosure>
-          </Section>
+                />}
+              />
+
+            </Section>
+
+            {/* 3. 高级规则词表与审计记录 */}
+            <Section
+              title="高级规则与审计记录"
+              description="自定义高危拦截、只读放行与删除特征的正则表达式，并查看历史审核判定记录。"
+            >
+              <Disclosure label={t('review.denyPatterns')}>
+                <div style={{ paddingTop: 6, paddingBottom: 6, width: '100%', boxSizing: 'border-box' }}>
+                  <TextAreaField
+                    label={t('review.denyPatterns')}
+                    value={c.commandReview.denyPatterns.join('\n')}
+                    disabled={disabled || !c.commandReview.enabled}
+                    rows={6}
+                    onCommit={next => {
+                      set(['commandReview', 'denyPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                    }} />
+                </div>
+              </Disclosure>
+              <Disclosure label={t('review.readPatterns')}>
+                <div style={{ paddingTop: 6, paddingBottom: 6, width: '100%', boxSizing: 'border-box' }}>
+                  <TextAreaField
+                    label={t('review.readPatterns')}
+                    value={(c.commandReview.readPatterns ?? DEFAULT_READ_PATTERNS).join('\n')}
+                    disabled={disabled || !c.commandReview.enabled || !(c.commandReview.writeOnly ?? true)}
+                    rows={5}
+                    onCommit={next => {
+                      set(['commandReview', 'readPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                    }} />
+                </div>
+              </Disclosure>
+              <Disclosure label={t('review.deletePatterns')}>
+                <div style={{ paddingTop: 6, paddingBottom: 6, width: '100%', boxSizing: 'border-box' }}>
+                  <TextAreaField
+                    label={t('review.deletePatterns')}
+                    value={(c.commandReview.deletePatterns ?? DEFAULT_DELETE_PATTERNS).join('\n')}
+                    disabled={disabled || !c.commandReview.enabled || !(c.commandReview.absoluteDenyDelete ?? true)}
+                    rows={6}
+                    onCommit={next => {
+                      set(['commandReview', 'deletePatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                    }} />
+                </div>
+              </Disclosure>
+
+              <Disclosure label={t('review.verdicts')}>
+                <AuditPanel enabled={c.commandReview.enabled} />
+              </Disclosure>
+            </Section>
+          </>
         )}
 
         {tab === 'files' && (
@@ -381,6 +703,7 @@ export function SettingsPage() {
             description={t('section.explorer.desc')}
             action={<Toggle label={t('section.explorer')} checked={c.explorer.enabled} disabled={disabled}
               onChange={next => { set(['explorer', 'enabled'], next) }} />}
+            onReset={() => { resetSection('explorer') }}
           >
             <Row
               label={t('explorer.side')}
@@ -399,13 +722,6 @@ export function SettingsPage() {
               control={<Toggle label={t('explorer.gitignore')} checked={c.explorer.respectGitignore} disabled={disabled || !c.explorer.enabled}
                 onChange={next => { set(['explorer', 'respectGitignore'], next) }} />}
             />
-            {c.explorer.enabled && (
-              <Disclosure label={t('explorer.preview')}>
-                <div style={{ border: `1px solid ${token.border}`, borderRadius: 8, padding: 8, maxHeight: 300, overflow: 'hidden', display: 'flex' }}>
-                  <ExplorerPanel />
-                </div>
-              </Disclosure>
-            )}
           </Section>
         )}
 
@@ -416,6 +732,7 @@ export function SettingsPage() {
               description={t('section.checkpoints.desc')}
               action={<Toggle label={t('section.checkpoints')} checked={c.checkpoints.enabled} disabled={disabled}
                 onChange={next => { set(['checkpoints', 'enabled'], next) }} />}
+              onReset={() => { resetSection('checkpoints') }}
             >
               <Row
                 label={t('cp.snapshotOn')}
@@ -430,34 +747,68 @@ export function SettingsPage() {
               <Row
                 label={t('cp.retention')}
                 hint={t('cp.retention.hint')}
-                control={<span style={{ fontSize: 11, color: token.textMuted }}>{c.checkpoints.retentionDays} {t('common.days')}</span>}
+                control={<NumberField
+                  label={t('cp.retention')}
+                  value={c.checkpoints.retentionDays}
+                  min={0} max={3650} step={1}
+                  disabled={disabled || !c.checkpoints.enabled}
+                  onCommit={next => { set(['checkpoints', 'retentionDays'], next) }} />}
               />
               <Row
                 label={t('cp.maxSize')}
-                control={<span style={{ fontSize: 11, color: token.textMuted }}>{c.checkpoints.maxFileSizeMb} MB</span>}
+                control={<NumberField
+                  label={t('cp.maxSize')}
+                  value={c.checkpoints.maxFileSizeMb}
+                  min={1} max={1024} step={1}
+                  disabled={disabled || !c.checkpoints.enabled}
+                  onCommit={next => { set(['checkpoints', 'maxFileSizeMb'], next) }} />}
               />
-              <Disclosure label={t('cp.list')}>
-                <CheckpointsPanel enabled={c.checkpoints.enabled} />
-              </Disclosure>
+            </Section>
+
+            <Section
+              title={t('section.sessions')}
+              description={t('section.sessions.desc')}
+              action={<Toggle label={t('section.sessions')} checked={c.sessionAdmin.enabled} disabled={disabled}
+                onChange={next => { set(['sessionAdmin', 'enabled'], next) }} />}
+              onReset={() => { resetSection('sessionAdmin') }}
+            >
+              <Row
+                label={t('sessions.gc')}
+                hint={t('sessions.gc.hint')}
+                control={<Toggle label={t('sessions.gc')} checked={c.sessionAdmin.attachmentGc} disabled={disabled || !c.sessionAdmin.enabled}
+                  onChange={next => { set(['sessionAdmin', 'attachmentGc'], next) }} />}
+              />
             </Section>
           </>
         )}
 
         {tab === 'plugins' && (
-          <Section
-            title={t('section.plugins')}
-            description={t('section.plugins.desc')}
-            action={<Toggle label={t('section.plugins')} checked={c.pluginSafety.enabled} disabled={disabled}
-              onChange={next => { set(['pluginSafety', 'enabled'], next) }} />}
-          >
-            <div style={{ paddingTop: 8 }}>
-              <PluginsPanel enabled={c.pluginSafety.enabled} />
-            </div>
-          </Section>
+          <>
+            <Section
+              title={t('section.plugins')}
+              description={t('section.plugins.desc')}
+              action={<Toggle label={t('section.plugins')} checked={c.pluginSafety.enabled} disabled={disabled}
+                onChange={next => { set(['pluginSafety', 'enabled'], next) }} />}
+              onReset={() => { resetSection('pluginSafety') }}
+            >
+              <div style={{ paddingTop: 4 }}>
+                <PluginsPanel enabled={c.pluginSafety.enabled} />
+              </div>
+            </Section>
 
+            <Section
+              title={t('plugins.rescueTitle')}
+              description="当第三方插件导致 Harness 启动失败或异常白屏时，可通过以下脱困机制进行快速修复："
+            >
+              <RescueBox />
+            </Section>
+          </>
         )}
         </SettingsBoundary>
+        </div>
       </div>
     </div>
   )
 }
+
+
