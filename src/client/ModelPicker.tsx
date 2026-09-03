@@ -140,6 +140,13 @@ export function ModelPicker(props: ModelPickerProps) {
 
   const busy = state.status === 'selecting'
   const modelLabel = currentModel?.name ?? t('picker.chooseModel')
+  // The trigger shows "provider · model" so a user can tell whose model they
+  // have picked without opening the menu. The provider name is the display name
+  // of the group holding the current selection; faint, so the model name stays
+  // the headline.
+  const providerName = current === null
+    ? undefined
+    : state.groups.find(group => group.id === current.provider)?.name
 
   const reload = useCallback(() => {
     lastAction.current = 'load'
@@ -290,7 +297,20 @@ export function ModelPicker(props: ModelPickerProps) {
         disabled={locked}
         onClick={() => { if (open) close(); else show() }}
       >
-        <span className={host?.triggerLabel} style={fb?.triggerLabel}>{modelLabel}</span>
+        <span className={host?.triggerLabel} style={fb?.triggerLabel}>
+          {providerName !== undefined && providerName.length > 0 && (
+            <span
+              aria-hidden="true"
+              style={{
+                fontWeight: 400,
+                opacity: 0.55,
+                marginRight: 5,
+                fontSize: '0.92em',
+              }}
+            >{providerName}</span>
+          )}
+          {modelLabel}
+        </span>
         {effortLabel !== undefined && (
           <span className={host?.triggerEffort} style={fb?.triggerEffort}>{effortLabel}</span>
         )}

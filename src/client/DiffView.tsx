@@ -86,9 +86,43 @@ for (const grammar of Object.values(grammars)) refractor.register(grammar)
  */
 const diffRefractor = {
   highlight(text: string, language: string) {
-    return refractor.highlight(text, language).children
+    const children = refractor.highlight(text, language).children
+    // The `markup` grammar (html/xml/svg/vue) nests element nodes several
+    // levels deep (tag → inner span → …). react-diff-view's token tree builder
+    // expects every non-text node to carry an ARRAY of `children`; a deeper
+    // self-closing node (`<br/>`, `<item/>`) can come through with no children,
+    // and flattening to a single text token is what keeps those languages from
+    // crashing the whole view. We keep the outermost class so the token still
+    // takes a colour; nested class detail is sacrificed, never the render.
+    if (language === 'markup') return flattenMarkup(children)
+    return children
   },
 } as unknown as typeof refractor
+
+/**
+ * Flatten HAST children into a single level of text tokens. Every element is
+ * reduced to one `{ type: 'text', value, properties }` whose value is the
+ * concatenation of all its descendant text, so no node below the top has a
+ * `children` array react-diff-view would have to walk.
+ */
+function flattenMarkup(nodes: readonly unknown[]): unknown[] {
+  const text = (node: unknown): string => {
+    if (typeof node === 'string') return node
+    if (node === null || typeof node !== 'object') return ''
+    const record = node as { children?: unknown; value?: unknown }
+    if (typeof record.value === 'string') return record.value
+    if (Array.isArray(record.children)) return record.children.map(text).join('')
+    return ''
+  }
+  return nodes.map(node => {
+    const record = node as { properties?: { className?: unknown } }
+    return {
+      type: 'text',
+      value: text(node),
+      ...(record.properties === undefined ? {} : { properties: record.properties }),
+    }
+  })
+}
 
 /** File extension → refractor grammar name (the host's shiki ids differ). */
 const GRAMMAR_BY_EXTENSION: Record<string, string> = {
@@ -114,6 +148,18 @@ export function grammarFor(path: string): string | undefined {
   const dot = name.lastIndexOf('.')
   const extension = dot <= 0 ? '' : name.slice(dot + 1)
   return GRAMMAR_BY_EXTENSION[extension]
+}
+
+/**
+ * Drop hunk slots react-diff-view's expansion helpers can leave `undefined`.
+ *
+ * `Hunk` reads `hunk.oldStart` on render, so a single missing slot becomes a
+ * whole-view crash. `expandCollapsedBlockBy`/`expandFromRawCode` keep a parallel
+ * index whose length can exceed the hunks actually written, so guard at the
+ * call site rather than trusting the library's return.
+ */
+function safeHunks(hunks: readonly HunkData[]): HunkData[] {
+  return hunks.filter((hunk): hunk is HunkData => hunk !== undefined && typeof hunk?.oldStart === 'number')
 }
 
 /**
@@ -286,7 +332,7 @@ export function CodeView(props: { path: string; content: string }) {
   }, [props.content])
   const hunks = useMemo(() => {
     const hunk = textLinesToHunk(lines, 1, 1)
-    return hunk === null ? [] : [hunk]
+    return safeHunks(hunk === null ? [] : [hunk])
   }, [lines])
   const tokens = useMemo(() => {
     if (language === undefined || hunks.length === 0) return null
@@ -374,15 +420,26 @@ export function DiffView(props: { path: string; scope: string }) {
   }, [])
 
   const hunks = useMemo(() => {
-    if (oldSource === null) return baseHunks
+    if (oldSource === null) return safeHunks(baseHunks)
     // Short gaps render in full; only the long ones stay behind bars.
-    let result = expandCollapsedBlockBy(baseHunks, oldSource, lines => lines < MIN_GAP_LINES)
-    for (const gap of gapsOf(baseHunks, oldLineCount)) {
-      if (gap.count >= MIN_GAP_LINES && expanded.has(gap.start)) {
-        result = expandFromRawCode(result, oldSource, gap.start, gap.end)
+    try {
+      let result = expandCollapsedBlockBy(baseHunks, oldSource, lines => lines < MIN_GAP_LINES)
+      for (const gap of gapsOf(baseHunks, oldLineCount)) {
+        if (gap.count >= MIN_GAP_LINES && expanded.has(gap.start)) {
+          result = expandFromRawCode(result, oldSource, gap.start, gap.end)
+        }
       }
+      // `expandCollapsedBlockBy`/`expandFromRawCode` can hand back a hunk slot
+      // the caller did not fill (react-diff-view 3 keeps a parallel index whose
+      // length can drift from the hunks it wrote), and can even throw when a
+      // hunk it builds is incomplete. Passing an `undefined` hunk to `Hunk`
+      // reads `hunk.oldStart` and crashes the whole view. Guard both ways: drop
+      // the empty slots, and on a throw fall back to the base hunks rather than
+      // let the panel die.
+      return safeHunks(result)
+    } catch {
+      return safeHunks(baseHunks)
     }
-    return result
   }, [baseHunks, oldSource, oldLineCount, expanded])
 
   const tokens = useMemo(() => {
@@ -418,7 +475,24 @@ export function DiffView(props: { path: string; scope: string }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 8,
+          minWidth: 0,
+          // The panel scrolls the whole diff, so the header row (path and line
+          // counts) would ride away with the hunks. Sticky pins it to the top
+          // while the diff scrolls underneath — the same treatment the file
+          // editor view and the review filter row get.
+          position: 'sticky',
+          top: 0,
+          zIndex: 1,
+          background: token.surfaceBase,
+          padding: '6px 0 2px',
+          margin: '-6px 0 0',
+        }}
+      >
         <span
           title={props.path}
           style={{ fontSize: 13, color: token.textMuted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}

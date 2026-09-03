@@ -1,14 +1,15 @@
 import { Component, useRef, useState, useCallback, useEffect, type ReactNode } from 'react'
-import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Menu, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useResource } from './use-resource.ts'
-import { INDENT, Notice, rowStyle, token } from './ui.tsx'
+import { INDENT, Notice, rowStyle, token, buttonStyle } from './ui.tsx'
 import { useT } from './use-locale.ts'
 import { FileIcon, FolderIcon } from './file-icons.tsx'
-import { ChevronIcon, CloseIcon, FilesIcon, GitIcon, PlusIcon, iconButtonStyle } from './icons.tsx'
+import { ChevronIcon, CloseIcon, FilesIcon, GitIcon, PlusIcon, VscodeIcon, IdeaIcon, FolderIcon as FolderGlyph, iconButtonStyle } from './icons.tsx'
 import { useTabs, bindPanelTabs, type Tab, type TabKind } from './tabs.ts'
+import { callApi } from './api.ts'
 import { CodeView, DiffView } from './DiffView.tsx'
 import { ReviewView } from './ReviewView.tsx'
-import type { ExplorerStatus, FileView, TreeEntry } from '../shared/api-contract.ts'
+import type { ExplorerStatus, FileView, OpenEditorResult, TreeEntry } from '../shared/api-contract.ts'
 
 /**
  * Feature 5 — the project explorer: a tabbed panel holding the workspace's file
@@ -45,17 +46,26 @@ interface TreeResponse {
  * overlay — the panel vanishes and, to the user, "won't open". This boundary
  * sits under that one and confines the damage to the active view's content.
  */
-class ViewBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  state = { failed: false }
-  static getDerivedStateFromError() {
-    return { failed: true }
+class ViewBoundary extends Component<{ children: ReactNode }, { failed: boolean; message: string }> {
+  state = { failed: false, message: '' }
+  static getDerivedStateFromError(error: Error) {
+    return { failed: true, message: error.message }
   }
   componentDidCatch(error: Error) {
     console.error('[dsh-dev-tool-ext] a side-panel view crashed:', error)
   }
   render() {
     if (this.state.failed) {
-      return <div style={{ fontSize: 12, color: token.textMuted, padding: '8px 0' }}>[dsh-dev-tool-ext] view crashed — close this tab and reopen it.</div>
+      return (
+        <div style={{ fontSize: 12, color: token.textMuted, padding: '8px 0' }}>
+          [dsh-dev-tool-ext] view crashed — close this tab and reopen it.
+          {this.state.message.length > 0 && (
+            <div style={{ marginTop: 6, color: token.danger, fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {this.state.message}
+            </div>
+          )}
+        </div>
+      )
     }
     return this.props.children
   }
@@ -225,6 +235,24 @@ function EditorView(props: { path: string; scope: string }) {
   const file = useResource<FileView>(
     `/explorer/file?path=${encodeURIComponent(props.path)}${props.scope.length === 0 ? '' : `&${props.scope}`}`,
   )
+  // The "open in editor/explorer" affordance, mirroring the turn-changes card
+  // and the session-header launcher: a small label button opening the same
+  // /explorer/open-editor endpoint. State lives above the early returns so a
+  // failed file read never costs the hook order.
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [failure, setFailure] = useState<{ text: string; seq: number } | undefined>(undefined)
+
+  async function openExternal(editor: 'explorer' | 'vscode' | 'idea') {
+    const parts = [
+      props.scope.length === 0 ? null : props.scope,
+      `path=${encodeURIComponent(props.path)}`,
+      `editor=${editor}`,
+    ].filter((part): part is string => part !== null)
+    const result = await callApi<OpenEditorResult>(`/explorer/open-editor?${parts.join('&')}`)
+    setMenuOpen(false)
+    if (result.ok) return
+    setFailure({ text: t('explorer.openEditorFailed', { message: result.message }), seq: Date.now() })
+  }
 
   if (file.error !== undefined) {
     return <Notice kind="error">{t('explorer.viewFailed', { message: file.error })}</Notice>
@@ -235,16 +263,65 @@ function EditorView(props: { path: string; scope: string }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          // The panel scrolls the whole view, so the header row (path, size,
+          // and the "open" menu) would ride away with the file content. Sticky
+          // pins it to the top while the content below scrolls — the same
+          // treatment the review list's filter row gets. An opaque background
+          // hides content passing underneath, and a z-index keeps it above them.
+          position: 'sticky',
+          top: 0,
+          zIndex: 1,
+          background: token.surfaceBase,
+          padding: '6px 0 2px',
+          margin: '-6px 0 0',
+        }}
+      >
         <span
           title={props.path}
           style={{ fontSize: 13, color: token.textMuted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
         >{props.path}</span>
         <span style={noteStyle}>{formatSize(file.data.bytes)}</span>
+        <Menu
+          open={menuOpen}
+          onClose={() => { setMenuOpen(false) }}
+          onSelect={(id) => { void openExternal(id as 'explorer' | 'vscode' | 'idea') }}
+          align="end"
+          // The panel scrolls inside an overflow container, which crops an
+          // in-place list (the menu would be cut at the panel edge). Portal
+          // renders the list into the body, fixed-positioned from the anchor
+          // rect, so the three "open in" rows are never clipped.
+          portal
+          items={[
+            { id: 'explorer', label: t('explorer.openWith.explorer'), icon: <FolderGlyph size={14} /> },
+            { id: 'vscode', label: t('explorer.openWith.vscode'), icon: <VscodeIcon size={14} /> },
+            { id: 'idea', label: t('explorer.openWith.idea'), icon: <IdeaIcon size={14} /> },
+          ]}
+          anchor={
+            <button
+              type="button"
+              aria-label={t('explorer.openEditor')}
+              title={t('explorer.openEditor')}
+              aria-expanded={menuOpen}
+              onClick={() => { setMenuOpen(value => !value) }}
+              style={{ ...buttonStyle, height: 22, minHeight: 0, padding: '0 7px', fontSize: 12, borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            >
+              <span>{t('turn.open')}</span>
+              <ChevronIcon size={11} open={menuOpen} />
+            </button>
+          }
+        />
       </div>
       <CodeView path={props.path} content={file.data.content} />
       {file.data.truncated && (
         <div style={noteStyle}>{t('explorer.truncatedFile', { lines: file.data.content.split('\n').length })}</div>
+      )}
+      {failure !== undefined && (
+        <Toast key={failure.seq} text={failure.text} onDone={() => { setFailure(undefined) }} />
       )}
     </div>
   )
