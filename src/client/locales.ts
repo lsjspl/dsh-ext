@@ -272,11 +272,15 @@ export const en = {
   'plugins.quarantinedCount': '{n} plugin(s) are quarantined and will not load on the next start.',
   'plugins.enable': 'Enable',
   'plugins.disable': 'Disable',
-  'plugins.enableAll': 'Enable every quarantined plugin',
-  'plugins.rescueTitle': 'If the harness will not start',
-  'plugins.rescueBody': 'This page is part of the same plugin tree, so it cannot help once a plugin breaks the boot. The dsh-ext command ships with this plugin for exactly that case and needs nothing from the harness to run:',
-  'plugins.rescueFile': 'Quarantine is stored as disable rows in {file}, which the launcher composes after every bundle layer — so a disabled row wins and no flag is needed at start. Your own entries in that file are left untouched.',
+  'plugins.rescueTitle': 'Emergency Recovery',
+  'plugins.rescueBody': 'When a third-party plugin causes Harness startup to fail, use these recovery mechanisms:',
+  'plugins.rescueWebTitle': '1. Web Boot Error Rescue (In-Browser)',
+  'plugins.rescueWebDesc': 'If frontend plugin boot gets stuck on the error card, an emergency panel appears automatically to quarantine the faulty plugin or enter Safe Mode with one click.',
+  'plugins.rescueCliTitle': '2. Rescue CLI (Out-of-Process Fallback)',
+  'plugins.rescueCliDesc': 'If the Node backend process exits during startup, run the standalone CLI commands in your terminal (zero external dependencies):',
+  'plugins.rescueFile': 'Quarantine records are written to {file} with top-layer priority. Your custom entries in that file remain intact.',
   'plugins.off': 'Plugin safety is switched off.',
+
 
   // Checkpoints
   'cp.snapshotOn': 'Snapshot on',
@@ -589,10 +593,15 @@ export const zh: Record<LocaleKey, string> = {
   'plugins.enable': '启用',
   'plugins.disable': '禁用',
   'plugins.enableAll': '启用所有被隔离的插件',
-  'plugins.rescueTitle': '如果 harness 起不来',
-  'plugins.rescueBody': '这个页面本身也在同一棵插件树里，所以一旦某个插件让启动失败，它就帮不上忙了。dsh-ext 命令随本插件一起安装，专为这种情况准备，运行时不依赖 harness：',
-  'plugins.rescueFile': '隔离记录写在 {file} 的 disable 行里，启动器会在所有 bundle 层之后再合成这一层 —— 所以 disable 行一定生效，启动时不需要加任何参数。你自己写在那个文件里的条目不会被动。',
+  'plugins.rescueTitle': '应急故障救援机制',
+  'plugins.rescueBody': '当第三方插件异常导致系统启动失败时，可通过以下脱困方案快速恢复：',
+  'plugins.rescueWebTitle': '1. 网页引导错误页急救（开箱即用）',
+  'plugins.rescueWebDesc': '若前端加载插件停滞在错误引导页，页面会自动呼出急救面板，支持在浏览器中一键隔离故障插件或开启安全模式。',
+  'plugins.rescueCliTitle': '2. 终端脱困 CLI（进程外兜底）',
+  'plugins.rescueCliDesc': '若后台 Node 进程在启动初期直接崩溃退出，可直接在终端执行独立急救命令（零外部依赖）：',
+  'plugins.rescueFile': '隔离配置自动持久化到 {file}。该层级位于所有插件配置之后，享有最高优先级覆盖权，重启即生效。用户在该文件中自行编写的其他配置不受影响。',
   'plugins.off': '插件安全已关闭。',
+
 
   'cp.snapshotOn': '快照时机',
   'cp.snapshotOn.turn': '每轮对话',

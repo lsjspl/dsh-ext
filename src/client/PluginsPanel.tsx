@@ -84,27 +84,88 @@ export function PluginsPanel(props: { enabled: boolean }) {
         >{t('plugins.enableAll')}</button>
       )}
 
-      <div style={{ border: `1px solid ${token.border}`, borderRadius: 6, padding: 10 }}>
-        <strong style={{ fontSize: 12 }}>{t('plugins.rescueTitle')}</strong>
-        <p style={{ fontSize: 12, color: token.textMuted, margin: '6px 0' }}>
+      <div style={{
+        border: `1px solid ${token.border}`,
+        borderRadius: 8,
+        padding: '14px 16px',
+        background: 'rgba(255, 255, 255, 0.02)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <strong style={{ fontSize: 13, fontWeight: 600, color: token.text }}>
+            {t('plugins.rescueTitle')}
+          </strong>
+          <span style={{
+            fontSize: 11,
+            color: token.textMuted,
+            padding: '2px 8px',
+            borderRadius: 4,
+            border: `1px solid ${token.border}`,
+            background: 'rgba(0, 0, 0, 0.2)',
+          }}>
+            故障自愈方案
+          </span>
+        </div>
+
+        <p style={{ fontSize: 12, color: token.textMuted, margin: 0, lineHeight: 1.5 }}>
           {t('plugins.rescueBody')}
         </p>
-        <pre style={{
-          ...inputStyle,
-          margin: 0,
-          padding: 8,
+
+        <div style={{
+          padding: '10px 12px',
+          borderRadius: 6,
+          background: 'rgba(0, 0, 0, 0.15)',
+          border: `1px solid ${token.border}`,
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: token.text, marginBottom: 4 }}>
+            {t('plugins.rescueWebTitle')}
+          </div>
+          <div style={{ fontSize: 12, color: token.textMuted, lineHeight: 1.5 }}>
+            {t('plugins.rescueWebDesc')}
+          </div>
+        </div>
+
+        <div style={{
+          padding: '10px 12px',
+          borderRadius: 6,
+          background: 'rgba(0, 0, 0, 0.15)',
+          border: `1px solid ${token.border}`,
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: token.text, marginBottom: 4 }}>
+            {t('plugins.rescueCliTitle')}
+          </div>
+          <div style={{ fontSize: 12, color: token.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
+            {t('plugins.rescueCliDesc')}
+          </div>
+          <pre style={{
+            margin: 0,
+            padding: '10px 12px',
+            fontSize: 11,
+            lineHeight: 1.7,
+            fontFamily: 'ui-monospace, monospace',
+            whiteSpace: 'pre-wrap',
+            background: '#09090b',
+            border: `1px solid ${token.border}`,
+            borderRadius: 6,
+            color: '#e4e4e7',
+          }}>{`npx dsh-ext safe        # 启用安全模式（跳过全部第三方插件）
+npx dsh-ext skip <name> # 隔离指定故障插件
+npx dsh-ext restore     # 解除所有隔离`}</pre>
+        </div>
+
+        <div style={{
           fontSize: 11,
-          lineHeight: 1.6,
-          fontFamily: 'ui-monospace, monospace',
-          whiteSpace: 'pre-wrap',
-        }}>{`npx dsh-ext safe        # start without any third-party plugin
-npx dsh-ext skip <name>     # skip one plugin
-npx dsh-ext uninstall <name>
-npx dsh-ext restore         # re-enable everything`}</pre>
-        <p style={{ fontSize: 11, color: token.textMuted, margin: '6px 0 0' }}>
+          color: token.textMuted,
+          lineHeight: 1.5,
+          paddingTop: 6,
+          borderTop: `1px solid ${token.border}`,
+        }}>
           {t('plugins.rescueFile', { file: view.data?.quarantineFile ?? '$DSH_HOME/cordis.patch.yml' })}
-        </p>
+        </div>
       </div>
+
     </div>
   )
 }
