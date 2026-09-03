@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -378,16 +378,38 @@ function registerModelPicker(ctx: Context): void {
  */
 function registerBalanceBadge(ctx: Context): void {
   trySlot('balance badge', () => {
-    ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
-      name: 'conversation.input.right',
-      id: 'dsh-dev-tool-ext-balance',
-      order: 0,
-      registrant: 'dsh-dev-tool-ext',
-    }, function DevToolBalanceBadge() {
+    ctx.inject(['slots', 'modelDirectories', 'sessions'], (scope: Context) => {
+      // The official-DeepSeek balance chip is meaningful only while the session
+      // is actually using the official route (it reports that route's standard
+      // pricing and peak/off-peak windows). A third-party (pi-ai) route has its
+      // own pricing and no DeepSeek peak table, so the chip would make a claim
+      // that does not apply. Read the session's current model provider through
+      // the same per-session directory the model selector uses, and skip the
+      // badge unless that provider is the official one.
+      const models = scope.modelDirectories
+      scope.slots.inject('conversation.input.right', () => scope.slots.register({
+        name: 'conversation.input.right',
+        id: 'dsh-dev-tool-ext-balance',
+        order: 0,
+        registrant: 'dsh-dev-tool-ext',
+      }, function DevToolBalanceBadge(props: { sessionId?: string }) {
       const config = useClientConfig()
       if (config?.deepseekBalance.enabled !== true || !config.deepseekBalance.headerBadge) return null
+      const sessionId = props.sessionId
+      if (sessionId === undefined || sessionId.length === 0) return null
+      const directory = models.directoryFor(sessionId as never)
+      const state = useSyncExternalStore(
+        useCallback((fn: () => void) => directory.store.subscribe(fn), [directory]),
+        useCallback(() => directory.store.getSnapshot(), [directory]),
+      )
+      // null before the first load; treat as official-unknown → hide. A session
+      // on a third-party route is filtered out here; only the official route id
+      // (deepseek / deepseek-official / deepseek-api) passes.
+      const provider = state.current?.provider
+      if (provider === undefined || !/^deepseek(-official|-api)?$/i.test(provider)) return null
       return <BalanceBadge />
-    }))
+      }))
+    })
   })
 }
 

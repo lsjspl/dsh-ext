@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { INDENT, Notice, buttonStyle, rowStyle, token } from './ui.tsx'
 import { useT, type Translate } from './use-locale.ts'
 import { FileIcon, FolderIcon } from './file-icons.tsx'
@@ -72,6 +72,44 @@ function countsFor(change: ChangeEntry, filter: ReviewFilter): { added: number; 
 }
 
 const treeStyle = { listStyle: 'none', margin: 0, padding: 0 } as const
+
+/**
+ * Persisted review-view preferences.
+ *
+ * The view is remounted by the panel whenever its tab set re-registers, so
+ * component-local `useState` would reset the user's "group by folder" and
+ * "which side" choices on every tab switch. These are reading preferences, not
+ * transient state — a user who flips to Flat keeps Flat. They are written to
+ * localStorage and initialised from it, the same pattern the model menu's
+ * collapse groups use.
+ */
+const VIEW_PREFS_KEY = 'dsh-dev-tool-ext:review-view-prefs'
+
+interface ViewPrefs {
+  readonly grouped: boolean
+  readonly filter: ReviewFilter
+}
+
+function readViewPrefs(): ViewPrefs {
+  try {
+    const raw = window.localStorage.getItem(VIEW_PREFS_KEY)
+    if (raw === null) return { grouped: false, filter: 'all' }
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return { grouped: false, filter: 'all' }
+    const grouped = (parsed as { grouped?: unknown }).grouped === true
+    const filter = (parsed as { filter?: unknown }).filter
+    const validFilter = filter === 'all' || filter === 'staged' || filter === 'unstaged'
+    return { grouped, filter: validFilter ? filter : 'all' }
+  } catch {
+    return { grouped: false, filter: 'all' }
+  }
+}
+
+function writeViewPrefs(prefs: ViewPrefs): void {
+  try {
+    window.localStorage.setItem(VIEW_PREFS_KEY, JSON.stringify(prefs))
+  } catch { /* a browser refusing storage still gets working prefs, just not sticky */ }
+}
 
 /** One row, in the file tree's anatomy: porcelain letters, icon, name, counts, kind. */
 function ReviewRow(props: {
@@ -243,9 +281,13 @@ function FolderNodes(props: {
  */
 export function ReviewView(props: { status: ExplorerStatus; onOpenDiff: (path: string) => void }) {
   const t = useT()
-  const [filter, setFilter] = useState<ReviewFilter>('all')
-  const [grouped, setGrouped] = useState(false)
+  const [filter, setFilter] = useState<ReviewFilter>(() => readViewPrefs().filter)
+  const [grouped, setGrouped] = useState(() => readViewPrefs().grouped)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+
+  // Persist the preferences whenever they move, so a user who flips to Flat or
+  // to Staged keeps that view when the panel remounts or another tab is picked.
+  useEffect(() => { writeViewPrefs({ grouped, filter }) }, [grouped, filter])
 
   const { changes } = props.status
   const filtered = useMemo(
