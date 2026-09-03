@@ -281,7 +281,7 @@ export function mountCheckpoints(
   routes: Record<string, ApiHandler>,
   checkpointRoot: string,
 ): () => void {
-  const log = ctx.logger('dsh-dev-tool-ext')
+  const log = ctx.logger('dsh-ext')
   const settings = config().checkpoints
   const store = new CheckpointStore(checkpointRoot, settings.excludes, settings.maxFileSizeMb)
 

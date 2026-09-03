@@ -9,7 +9,7 @@
  * English inside an otherwise Chinese page.
  */
 
-export const LOCALE_NS = 'dsh-dev-tool-ext'
+export const LOCALE_NS = 'dsh-ext'
 
 /** The key domain. One object literal so a missing translation is a type error. */
 export const en = {

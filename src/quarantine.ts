@@ -21,8 +21,10 @@ import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
  * feature could silently drop someone's hand-written composition.
  */
 
-export const BEGIN_MARK = '# >>> dsh-dev-tool-ext: quarantine (managed; edit via Settings or `dsh-ext`) >>>'
-export const END_MARK = '# <<< dsh-dev-tool-ext: quarantine <<<'
+export const BEGIN_MARK = '# >>> dsh-ext: quarantine (managed; edit via Settings or `dsh-ext`) >>>'
+export const END_MARK = '# <<< dsh-ext: quarantine <<<'
+export const LEGACY_BEGIN_MARK = '# >>> dsh-dev-tool-ext: quarantine (managed; edit via Settings or `dsh-ext`) >>>'
+export const LEGACY_END_MARK = '# <<< dsh-dev-tool-ext: quarantine <<<'
 
 export interface QuarantineRecord {
   /** Loader row ids to disable on the next start. */
@@ -79,13 +81,13 @@ export function renderRegion(rows: readonly string[]): string {
  * content is just that placeholder, it is dropped rather than appended to.
  */
 export function spliceRegion(existing: string, rows: readonly string[]): string {
-  const begin = existing.indexOf(BEGIN_MARK)
-  const end = existing.indexOf(END_MARK)
-  let outside: string
-  if (begin >= 0 && end > begin) {
-    outside = existing.slice(0, begin) + existing.slice(end + END_MARK.length)
-  } else {
-    outside = existing
+  let outside = existing
+  for (const [beginMark, endMark] of [[BEGIN_MARK, END_MARK], [LEGACY_BEGIN_MARK, LEGACY_END_MARK]] as const) {
+    const begin = outside.indexOf(beginMark)
+    const end = outside.indexOf(endMark)
+    if (begin >= 0 && end > begin) {
+      outside = outside.slice(0, begin) + outside.slice(end + endMark.length)
+    }
   }
 
   // An `[]` placeholder is the empty list, not a sibling of list entries.

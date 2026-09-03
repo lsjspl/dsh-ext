@@ -142,7 +142,7 @@ export function SidePanel(props: SidePanelProps) {
 
   return (
     <div
-      data-dsh-plugin="dsh-dev-tool-ext"
+      data-dsh-plugin="dsh-ext"
       data-dsh-part="side-panel"
       style={{
         position: 'absolute',

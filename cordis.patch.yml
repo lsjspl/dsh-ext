@@ -1,12 +1,12 @@
-# The dsh-plugin-dev-tool-ext bundle patch.
+# The dsh-ext bundle patch.
 #
 # One host row. Every feature is gated by the plugin's own Schemastery config
-# and by the `dsh-dev-tool-ext` settings namespace it installs, so a user turns
+# and by the `dsh-ext` settings namespace it installs, so a user turns
 # features on and off from Settings without editing this file.
 #
 # The browser half is NOT a row: it is served automatically because
 # package.json declares `dsh.client`.
 
 - insert:
-    - id: dsh-dev-tool-ext
-      name: dsh-plugin-dev-tool-ext
+    - id: dsh-ext
+      name: dsh-ext

@@ -40,23 +40,23 @@ export function isPeakNow(windows: readonly string[], weekdaysOnly: boolean, now
  * damage numbers, for your wallet. Styles are injected once because keyframes
  * cannot be written as inline styles.
  */
-const HURT_CLASS = 'dsh-dev-tool-ext-hurt'
-const DROP_CLASS = 'dsh-dev-tool-ext-drop'
+const HURT_CLASS = 'dsh-ext-hurt'
+const DROP_CLASS = 'dsh-ext-drop'
 let badgeStylesInjected = false
 function injectBadgeStyles(): void {
   if (badgeStylesInjected || typeof document === 'undefined') return
   badgeStylesInjected = true
   const style = document.createElement('style')
-  style.dataset.dshPlugin = 'dsh-dev-tool-ext'
+  style.dataset.dshPlugin = 'dsh-ext'
   style.textContent = `
-@keyframes dsh-dev-tool-ext-shake {
+@keyframes dsh-ext-shake {
   0%, 100% { transform: translateX(0); }
   25% { transform: translateX(-2px); }
   50% { transform: translateX(2px); }
   75% { transform: translateX(-1px); }
 }
-.${HURT_CLASS} { animation: dsh-dev-tool-ext-shake 0.4s ease-in-out 2; }
-@keyframes dsh-dev-tool-ext-fall {
+.${HURT_CLASS} { animation: dsh-ext-shake 0.4s ease-in-out 2; }
+@keyframes dsh-ext-fall {
   0% { opacity: 1; transform: translateY(2px); }
   100% { opacity: 0; transform: translateY(-16px); }
 }
@@ -64,7 +64,7 @@ function injectBadgeStyles(): void {
   position: absolute; top: -8px; right: 0;
   font-size: 10px; font-weight: 600; line-height: 1;
   pointer-events: none; white-space: nowrap;
-  animation: dsh-dev-tool-ext-fall 1.3s ease-out forwards;
+  animation: dsh-ext-fall 1.3s ease-out forwards;
 }
 `
   document.head.appendChild(style)
@@ -194,7 +194,7 @@ export function BalanceBadge() {
   const peakText = t(peak ? 'balance.peak' : 'balance.offPeak')
   return (
     <span
-      data-dsh-plugin="dsh-dev-tool-ext"
+      data-dsh-plugin="dsh-ext"
       data-dsh-part="balance-badge"
       title={t('balance.badge.title', {
         windows: peakWindows.join(', '),

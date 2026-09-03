@@ -1066,7 +1066,7 @@ export function mountExplorer(
       const requested = query.get('path') ?? ''
       const target = requested.length === 0 ? root : await containedPath(root, requested)
       const editorType = query.get('editor') ?? 'vscode'
-      ctx.logger('dsh-dev-tool-ext').info('[Explorer] Opening with editor type: %s, target: %s', editorType, target)
+      ctx.logger('dsh-ext').info('[Explorer] Opening with editor type: %s, target: %s', editorType, target)
       return await openInEditor(root, target, requested.length > 0, editorType)
     },
   })

@@ -281,7 +281,7 @@ export function mountCommandReview(
   routes: Record<string, ApiHandler>,
   auditFile: string,
 ): () => void {
-  const log = ctx.logger('dsh-dev-tool-ext')
+  const log = ctx.logger('dsh-ext')
   const warn = (message: string, detail: unknown) => { log.warn(message, detail) }
   const audit = new AuditLog(auditFile, warn)
 

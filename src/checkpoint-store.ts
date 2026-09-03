@@ -32,8 +32,8 @@ import type { CheckpointRow } from './shared/api-contract.ts'
  */
 
 /** Commit identity for shadow commits. Never the user's, so their config is untouched. */
-const AUTHOR_NAME = 'dsh-dev-tool-ext'
-const AUTHOR_EMAIL = 'checkpoints@dsh-dev-tool-ext.invalid'
+const AUTHOR_NAME = 'dsh-ext'
+const AUTHOR_EMAIL = 'checkpoints@dsh-ext.invalid'
 
 /** Message prefix carrying the session id, so a log is filterable by session. */
 const MESSAGE_PREFIX = 'dsh-checkpoint'
@@ -176,7 +176,7 @@ export class CheckpointStore {
     const infoDir = join(repo.gitDir, 'info')
     await mkdir(infoDir, { recursive: true, mode: 0o700 })
     const lines = [
-      '# Written by dsh-dev-tool-ext. Edit the plugin settings, not this file.',
+      '# Written by dsh-ext. Edit the plugin settings, not this file.',
       // The load-bearing one: the project's own history is not ours to copy.
       '/.git/',
       ...this.excludes,

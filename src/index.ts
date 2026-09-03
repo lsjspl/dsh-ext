@@ -14,7 +14,7 @@ import { mountCheckpoints } from './features/checkpoints.ts'
 import { mountReasoningEffort } from './features/reasoning-effort.ts'
 
 export { Config } from './config.ts'
-export const name = 'dsh-dev-tool-ext'
+export const name = 'dsh-ext'
 
 /**
  * `webServer` is the only hard requirement: it carries the browser half's API.
@@ -30,7 +30,7 @@ export const name = 'dsh-dev-tool-ext'
 export const inject = ['webServer']
 
 export function apply(ctx: Context, entry: Config): void {
-  const log = ctx.logger('dsh-dev-tool-ext')
+  const log = ctx.logger('dsh-ext')
   const paths = pluginPaths()
 
   const routes: Record<string, ApiHandler> = {
@@ -125,7 +125,7 @@ export function apply(ctx: Context, entry: Config): void {
       } catch { /* teardown is best-effort */ }
     }
     mounted.clear()
-  }, 'dsh-dev-tool-ext: feature teardown')
+  }, 'dsh-ext: feature teardown')
 
   log.info('mounted; data directory %s', paths.root)
   reconcile()

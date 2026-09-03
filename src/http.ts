@@ -47,7 +47,7 @@ export function installRoutes(
   for (const [route, handler] of Object.entries(additions)) {
     if (table[route] !== undefined) {
       for (const key of added) delete table[key]
-      throw new Error(`dsh-dev-tool-ext: two features both claim the route ${route}`)
+      throw new Error(`dsh-ext: two features both claim the route ${route}`)
     }
     table[route] = handler
     added.push(route)
@@ -138,9 +138,9 @@ export function serveApi(ctx: Context, routes: Readonly<Record<string, ApiHandle
           send(error.status, { ok: false, message: error.message })
           return
         }
-        ctx.logger('dsh-dev-tool-ext').warn(error)
+        ctx.logger('dsh-ext').warn(error)
         send(500, { ok: false, message: 'internal error; see the harness log' })
       }
     },
-  }), 'dsh-dev-tool-ext: json api')
+  }), 'dsh-ext: json api')
 }

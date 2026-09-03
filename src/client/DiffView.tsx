@@ -254,13 +254,13 @@ function GapBar(props: { gap: Gap; onExpand: (start: number) => void }) {
 // Prism token class names and ships no colours, so without this mapping every
 // token inherits the plain text colour. Mapping the Prism classes onto the
 // SAME `--shiki-*` variables is what makes a diff and the file viewer agree.
-const DIFF_CLASS = 'dsh-dev-tool-ext-diff'
+const DIFF_CLASS = 'dsh-ext-diff'
 let diffStylesInjected = false
 function injectDiffStyles(): void {
   if (diffStylesInjected || typeof document === 'undefined') return
   diffStylesInjected = true
   const style = document.createElement('style')
-  style.dataset.dshPlugin = 'dsh-dev-tool-ext'
+  style.dataset.dshPlugin = 'dsh-ext'
   style.textContent = `
 .${DIFF_CLASS} { border-collapse: collapse; table-layout: fixed; width: 100%; font-size: 13px; color: ${token.text}; }
 .${DIFF_CLASS} td { padding: 0; vertical-align: top; }

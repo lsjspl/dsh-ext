@@ -40,7 +40,7 @@ export function bindSettings<T>(
   let source = () => entry
   let unloading = false
 
-  ctx.effect(() => () => { unloading = true }, 'dsh-dev-tool-ext: settings unload guard')
+  ctx.effect(() => () => { unloading = true }, 'dsh-ext: settings unload guard')
 
   ctx.inject(['settings'], (sctx) => {
     const scope = sctx.settings.register(NAMESPACE, schema, { base: entry })
@@ -51,7 +51,7 @@ export function bindSettings<T>(
       if (unloading) return
       source = () => entry
       onChange()
-    }, 'dsh-dev-tool-ext: settings detach')
+    }, 'dsh-ext: settings detach')
 
     onChange()
     scope.watch(() => {

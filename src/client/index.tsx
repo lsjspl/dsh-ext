@@ -36,7 +36,7 @@ import { useConfig } from './use-config.ts'
 import { token } from './ui.tsx'
 import type { OpenEditorResult } from '../shared/api-contract.ts'
 
-export const name = 'dsh-dev-tool-ext-client'
+export const name = 'dsh-ext-client'
 /**
  * Only `slots` is declared here — every seat this plugin takes goes through it.
  *
@@ -79,7 +79,7 @@ function trySlot(label: string, register: () => void): void {
     // The console is the only channel available: this runs before any of this
     // plugin's own UI exists to display a notice in.
     console.warn(
-      `[dsh-dev-tool-ext] the "${label}" surface could not be registered, so that one feature is unavailable. `
+      `[dsh-ext] the "${label}" surface could not be registered, so that one feature is unavailable. `
       + 'Everything else still loaded.',
       error,
     )
@@ -94,7 +94,7 @@ export function apply(ctx: Context): void {
   trySlot('settings page', () => {
     ctx.slots.inject('settings.section', () => ctx.slots.register({
       name: 'settings.section',
-      id: 'dsh-dev-tool-ext',
+      id: 'dsh-ext',
       order: 720,
       label: () => (document.documentElement.lang.startsWith('zh') ? '开发工具' : 'Dev Tools'),
     }, SettingsPage))
@@ -135,7 +135,7 @@ function installLocale(ctx: Context): void {
       for (const [id, dict] of Object.entries(DICTS)) {
         // The untyped three-argument form: this namespace is not merged into the
         // shell's LocaleNamespaceMap, which is the documented case for it.
-        ctx.effect(() => locale.register!(LOCALE_NS, id, dict as Record<string, string>), `dsh-dev-tool-ext: ${id} dictionary`)
+        ctx.effect(() => locale.register!(LOCALE_NS, id, dict as Record<string, string>), `dsh-ext: ${id} dictionary`)
       }
     }
     if (typeof locale.subscribe === 'function' && typeof locale.getSnapshot === 'function') {
@@ -146,7 +146,7 @@ function installLocale(ctx: Context): void {
       })
     }
   } catch (error: unknown) {
-    console.warn('[dsh-dev-tool-ext] the locale runtime was unavailable; text stays in English.', error)
+    console.warn('[dsh-ext] the locale runtime was unavailable; text stays in English.', error)
   }
 }
 
@@ -159,7 +159,7 @@ function registerComposerImages(ctx: Context): void {
     ctx.slots.inject('conversation.input.attachments', () => ctx.slots.register({
       name: 'conversation.input.attachments',
       priority: SHADOW_PRIORITY,
-      registrant: 'dsh-dev-tool-ext',
+      registrant: 'dsh-ext',
     }, function DevToolAttachments(props) {
       const config = useClientConfig()
       const input = props.useInput(state => state)
@@ -202,9 +202,9 @@ function registerImageTrigger(ctx: Context): void {
   trySlot('composer attach button', () => {
     ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
       name: 'conversation.input.left',
-      id: 'dsh-dev-tool-ext-attach',
+      id: 'dsh-ext-attach',
       order: 0,
-      registrant: 'dsh-dev-tool-ext',
+      registrant: 'dsh-ext',
     }, function DevToolAttachButton(props) {
       const t = useT()
       const config = useClientConfig()
@@ -221,7 +221,7 @@ function registerImageTrigger(ctx: Context): void {
           onClick={openImagePicker}
           aria-label={t('files.attach')}
           title={t('files.attach')}
-          data-dsh-plugin="dsh-dev-tool-ext"
+          data-dsh-plugin="dsh-ext"
           data-dsh-part="attach-button"
           style={{ ...iconButtonStyle, opacity: disabled ? 0.45 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }}
         >
@@ -287,7 +287,7 @@ function registerToolsGroup(ctx: Context): void {
           openImagePicker()
           return 'handled'
         },
-      }), 'dsh-dev-tool-ext: slash tools group')
+      }), 'dsh-ext: slash tools group')
     })
   })
 }
@@ -329,7 +329,7 @@ function registerModelPicker(ctx: Context): void {
       scope.slots.inject('conversation.input.model', () => scope.slots.register({
         name: 'conversation.input.model',
         priority: SHADOW_PRIORITY,
-        registrant: 'dsh-dev-tool-ext',
+        registrant: 'dsh-ext',
         inject: (sessionId) => {
           const directory = models.directoryFor(sessionId)
           // An addressed subagent session cannot have its model reassigned; the
@@ -394,9 +394,9 @@ function registerBalanceBadge(ctx: Context): void {
       const models = scope.modelDirectories
       scope.slots.inject('conversation.input.right', () => scope.slots.register({
         name: 'conversation.input.right',
-        id: 'dsh-dev-tool-ext-balance',
+        id: 'dsh-ext-balance',
         order: 0,
-        registrant: 'dsh-dev-tool-ext',
+        registrant: 'dsh-ext',
       }, function DevToolBalanceBadge(props: { sessionId?: string }) {
       const config = useClientConfig()
       if (config?.deepseekBalance.enabled !== true || !config.deepseekBalance.headerBadge) return null
@@ -440,9 +440,9 @@ function registerAutoReviewMode(ctx: Context): void {
   trySlot('auto review mode', () => {
     ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
       name: 'conversation.input.left',
-      id: 'dsh-dev-tool-ext-auto-review',
+      id: 'dsh-ext-auto-review',
       order: 0,
-      registrant: 'dsh-dev-tool-ext',
+      registrant: 'dsh-ext',
     }, function DevToolAutoReviewMode() {
       const t = useT()
       const { view, busy, setMany } = useConfig()
@@ -538,7 +538,7 @@ function registerUserEditBubbles(ctx: Context): void {
       scope.slots.inject('conversation.chat.node', () => scope.slots.register({
         name: 'conversation.chat.node',
         key: 'user',
-        registrant: 'dsh-dev-tool-ext',
+        registrant: 'dsh-ext',
         priority: -10,
         inject: (sessionId) => ({
           sessionId: String(sessionId),
@@ -576,7 +576,7 @@ function registerTurnChangesCards(ctx: Context): void {
       const lastTurn = new Map<string, { turn: number; status: 'open' | 'closed' | 'unknown' }>()
       scope.slots.inject('conversation.chat.turnTail', () => scope.slots.register({
         name: 'conversation.chat.turnTail',
-        registrant: 'dsh-dev-tool-ext',
+        registrant: 'dsh-ext',
         // Mount for every turn tail — running ones included, so the file list
         // is live while the agent works. The card hides itself when the turn
         // never mutated a tracked file.
@@ -680,9 +680,9 @@ function registerSidePanel(ctx: Context): void {
   trySlot('project side panel', () => {
     ctx.slots.inject('shell.overlay', () => ctx.slots.register({
       name: 'shell.overlay',
-      id: 'dsh-dev-tool-ext-explorer',
+      id: 'dsh-ext-explorer',
       order: 40,
-      registrant: 'dsh-dev-tool-ext',
+      registrant: 'dsh-ext',
     }, function DevToolSidePanel(props: { useWorkspaces?: WorkspacesHook }) {
       const config = useClientConfig()
       // Root-scope seats get `useWorkspaces`; it is the only reliable answer to
@@ -714,9 +714,9 @@ function registerExplorerToggles(ctx: Context): void {
   trySlot('explorer toggle', () => {
     ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
       name: 'conversation.session.header.utilities',
-      id: 'dsh-dev-tool-ext-explorer-toggle',
+      id: 'dsh-ext-explorer-toggle',
       order: 70,
-      registrant: 'dsh-dev-tool-ext',
+      registrant: 'dsh-ext',
     }, function DevToolExplorerToggle(props: { sessionId?: string }) {
       const t = useT()
       const config = useClientConfig()
@@ -766,9 +766,9 @@ function registerOpenEditorLauncher(ctx: Context): void {
   trySlot('explorer open-editor launcher', () => {
     ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
       name: 'conversation.session.header.utilities',
-      id: 'dsh-dev-tool-ext-open-editor',
+      id: 'dsh-ext-open-editor',
       order: 2,
-      registrant: 'dsh-dev-tool-ext',
+      registrant: 'dsh-ext',
     }, function DevToolOpenEditorLauncher(props: { sessionId?: string }) {
       const t = useT()
       const config = useClientConfig()
@@ -911,9 +911,9 @@ function registerRecycleBin(ctx: Context): void {
   trySlot('recycle bin', () => {
     ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
       name: 'sidebar.footer.action',
-      id: 'dsh-dev-tool-ext-trash',
+      id: 'dsh-ext-trash',
       order: 0,
-      registrant: 'dsh-dev-tool-ext',
+      registrant: 'dsh-ext',
     }, function DevToolRecycleBin(props: { wide: boolean }) {
       const t = useT()
       const config = useClientConfig()

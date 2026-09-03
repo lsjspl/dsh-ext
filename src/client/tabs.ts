@@ -31,8 +31,8 @@ interface TabState {
   readonly activeId: string
 }
 
-const STORAGE_PREFIX = 'dsh-dev-tool-ext:side-panel-tabs:'
-const LEGACY_STORAGE_KEY = 'dsh-dev-tool-ext:side-panel-tabs'
+const STORAGE_PREFIX = 'dsh-ext:side-panel-tabs:'
+const LEGACY_STORAGE_KEY = 'dsh-ext:side-panel-tabs'
 const DEFAULT_SCOPE = 'unscoped'
 
 function storageKey(scope: string): string {

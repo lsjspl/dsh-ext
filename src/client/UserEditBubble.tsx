@@ -162,7 +162,7 @@ export function UserEditBubble(props: {
       try {
         await props.workspaces?.archiveSession(props.sessionId as never)
       } catch (archiveError: unknown) {
-        console.warn('[dsh-dev-tool-ext] archiving the original session after edit failed:', archiveError)
+        console.warn('[dsh-ext] archiving the original session after edit failed:', archiveError)
       }
       setEditing(false)
     }
@@ -170,7 +170,7 @@ export function UserEditBubble(props: {
 
   if (editing) {
     return (
-      <div data-dsh-plugin="dsh-dev-tool-ext" data-dsh-part="user-edit" style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '6px 0 10px' }}>
+      <div data-dsh-plugin="dsh-ext" data-dsh-part="user-edit" style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '6px 0 10px' }}>
         <div
           style={{
             borderRadius: 16,
@@ -267,7 +267,7 @@ export function UserEditBubble(props: {
 
   return (
     <div
-      data-dsh-plugin="dsh-dev-tool-ext"
+      data-dsh-plugin="dsh-ext"
       data-dsh-part="user-bubble"
       className="__dsh_user_row__"
       style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', margin: '8px 0' }}

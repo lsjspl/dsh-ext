@@ -1,5 +1,5 @@
 {
-  "name": "dsh-plugin-dev-tool-ext",
+  "name": "dsh-ext",
   "version": "0.1.0",
   "description": "DeepSeek Harness plugin: composer image picker with drag-reorder, reasoning-effort editor for third-party providers, DeepSeek balance, LLM command review, project explorer sidebar, session delete with trash, plugin safe-mode rescue CLI, and shadow-git session checkpoints.",
   "keywords": [
@@ -17,6 +17,7 @@
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [

@@ -254,7 +254,7 @@ export function ComposerImages(props: ComposerImagesProps) {
 
   return (
     <div
-      data-dsh-plugin="dsh-dev-tool-ext"
+      data-dsh-plugin="dsh-ext"
       data-dsh-part="composer-images"
       onDragOver={onFileDragOver}
       onDragLeave={() => { setFileOver(false) }}

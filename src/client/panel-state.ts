@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react'
  * reload rather than reverting to the configured default every time.
  */
 
-const STORAGE_KEY = 'dsh-dev-tool-ext:side-panel-open'
+const STORAGE_KEY = 'dsh-ext:side-panel-open'
 
 let open: boolean | undefined
 const listeners = new Set<() => void>()

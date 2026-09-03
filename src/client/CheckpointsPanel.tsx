@@ -91,7 +91,7 @@ export function CheckpointsPanel(props: { sessionId?: string; enabled: boolean }
   }
 
   return (
-    <div data-dsh-plugin="dsh-dev-tool-ext" data-dsh-part="checkpoints" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div data-dsh-plugin="dsh-ext" data-dsh-part="checkpoints" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         <button
           type="button"

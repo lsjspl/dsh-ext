@@ -83,7 +83,7 @@ const treeStyle = { listStyle: 'none', margin: 0, padding: 0 } as const
  * localStorage and initialised from it, the same pattern the model menu's
  * collapse groups use.
  */
-const VIEW_PREFS_KEY = 'dsh-dev-tool-ext:review-view-prefs'
+const VIEW_PREFS_KEY = 'dsh-ext:review-view-prefs'
 
 interface ViewPrefs {
   readonly grouped: boolean

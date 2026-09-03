@@ -5,14 +5,14 @@
  */
 
 /** Every endpoint this plugin serves lives under one prefix. */
-export const API_PREFIX = '/api/dev-tool-ext'
+export const API_PREFIX = '/api/dsh-ext'
 
 /**
  * The settings namespace the host installs and the settings page edits. The
  * seam requires a lowercase-hyphenated identifier and brands the string; the
  * host mints the branded form with `settingsNamespace()` at registration.
  */
-export const SETTINGS_NS = 'dsh-dev-tool-ext'
+export const SETTINGS_NS = 'dsh-ext'
 
 // ── DeepSeek balance ────────────────────────────────────────────────────────
 

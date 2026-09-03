@@ -143,7 +143,7 @@ export function mountPluginSafety(
   routes: Record<string, ApiHandler>,
   quarantineFile: string,
 ): () => void {
-  const log = ctx.logger('dsh-dev-tool-ext')
+  const log = ctx.logger('dsh-ext')
   const patchFile = dshHomePath('cordis.patch.yml')
 
   function requireEnabled(): void {

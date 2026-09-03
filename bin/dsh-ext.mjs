@@ -36,12 +36,14 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 
-const PLUGIN_DIR = 'dsh-dev-tool-ext'
+const PLUGIN_DIR = 'dsh-ext'
 const PATCH_FILE = 'cordis.patch.yml'
 const RECORD_FILE = 'quarantine.json'
 
-const BEGIN_MARK = '# >>> dsh-dev-tool-ext: quarantine (managed; edit via Settings or `dsh-ext`) >>>'
-const END_MARK = '# <<< dsh-dev-tool-ext: quarantine <<<'
+const BEGIN_MARK = '# >>> dsh-ext: quarantine (managed; edit via Settings or `dsh-ext`) >>>'
+const END_MARK = '# <<< dsh-ext: quarantine <<<'
+const LEGACY_BEGIN_MARK = '# >>> dsh-dev-tool-ext: quarantine (managed; edit via Settings or `dsh-ext`) >>>'
+const LEGACY_END_MARK = '# <<< dsh-dev-tool-ext: quarantine <<<'
 
 /** Bundles that ship with dsh itself. Never disabled by `safe`. */
 const BUILTIN_PREFIX = '@deepseek-ai/dsh'
@@ -106,11 +108,14 @@ function renderRegion(rows) {
 
 /** Replace the managed region, preserving every hand-written entry outside it. */
 function spliceRegion(existing, rows) {
-  const begin = existing.indexOf(BEGIN_MARK)
-  const end = existing.indexOf(END_MARK)
-  const outside = begin >= 0 && end > begin
-    ? existing.slice(0, begin) + existing.slice(end + END_MARK.length)
-    : existing
+  let outside = existing
+  for (const [beginMark, endMark] of [[BEGIN_MARK, END_MARK], [LEGACY_BEGIN_MARK, LEGACY_END_MARK]]) {
+    const begin = outside.indexOf(beginMark)
+    const end = outside.indexOf(endMark)
+    if (begin >= 0 && end > begin) {
+      outside = outside.slice(0, begin) + outside.slice(end + endMark.length)
+    }
+  }
 
   // An `[]` placeholder is the empty list, not a sibling of list entries.
   const trimmed = outside.replace(/^\s*\[\s*\]\s*$/m, '').replace(/\n{3,}/g, '\n\n').trim()

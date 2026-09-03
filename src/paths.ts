@@ -2,9 +2,11 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
+import { existsSync } from 'node:fs'
+
 /** Everything this plugin writes lives under one directory in the harness home. */
 export interface PluginPaths {
-  /** `$DSH_HOME/dsh-dev-tool-ext`. */
+  /** `$DSH_HOME/dsh-ext`. */
   readonly root: string
   /** Shadow git repositories, one per workspace root. */
   readonly checkpoints: string
@@ -15,12 +17,14 @@ export interface PluginPaths {
 }
 
 export function pluginPaths(): PluginPaths {
-  const root = dshHomePath('dsh-dev-tool-ext')
+  const legacy = dshHomePath('dsh-dev-tool-ext')
+  const root = dshHomePath('dsh-ext')
+  const activeRoot = (!existsSync(root) && existsSync(legacy)) ? legacy : root
   return {
-    root,
-    checkpoints: join(root, 'checkpoints'),
-    auditLog: join(root, 'command-review.jsonl'),
-    quarantine: join(root, 'quarantine.json'),
+    root: activeRoot,
+    checkpoints: join(activeRoot, 'checkpoints'),
+    auditLog: join(activeRoot, 'command-review.jsonl'),
+    quarantine: join(activeRoot, 'quarantine.json'),
   }
 }
 

@@ -198,7 +198,7 @@ export function mountSessionAdmin(
   config: () => Config,
   routes: Record<string, ApiHandler>,
 ): () => void {
-  const log = ctx.logger('dsh-dev-tool-ext')
+  const log = ctx.logger('dsh-ext')
 
   /**
    * The live registry, narrowed to the archive-set surface this feature needs.

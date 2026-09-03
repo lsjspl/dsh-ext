@@ -52,13 +52,13 @@ class ViewBoundary extends Component<{ children: ReactNode }, { failed: boolean;
     return { failed: true, message: error.message }
   }
   componentDidCatch(error: Error) {
-    console.error('[dsh-dev-tool-ext] a side-panel view crashed:', error)
+    console.error('[dsh-ext] a side-panel view crashed:', error)
   }
   render() {
     if (this.state.failed) {
       return (
         <div style={{ fontSize: 12, color: token.textMuted, padding: '8px 0' }}>
-          [dsh-dev-tool-ext] view crashed — close this tab and reopen it.
+          [dsh-ext] view crashed — close this tab and reopen it.
           {this.state.message.length > 0 && (
             <div style={{ marginTop: 6, color: token.danger, fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
               {this.state.message}
@@ -495,7 +495,7 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
     // `flex: 1` and `minHeight: 0` together: the first claims the panel's full
     // height instead of collapsing to content, the second lets the scrolling
     // children shrink below their intrinsic size rather than overflowing it.
-    <div data-dsh-plugin="dsh-dev-tool-ext" data-dsh-part="explorer" style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 0 }}>
+    <div data-dsh-plugin="dsh-ext" data-dsh-part="explorer" style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
         <TabStrip
           tabs={tabs}

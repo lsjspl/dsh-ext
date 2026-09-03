@@ -189,7 +189,7 @@ const spliced = mod.spliceRegion(handWritten, ['bad-plugin'])
 check('a hand-written entry survives', spliced.includes('- id: my-row'), true)
 check('the disable row is added', spliced.includes('- id: bad-plugin\n  disabled: true'), true)
 check('re-splicing does not duplicate the region',
-  (mod.spliceRegion(spliced, ['bad-plugin']).match(/dsh-dev-tool-ext: quarantine \(managed/g) ?? []).length, 1)
+  (mod.spliceRegion(spliced, ['bad-plugin']).match(/dsh-ext: quarantine \(managed/g) ?? []).length, 1)
 check('removing every row restores the hand-written file',
   mod.spliceRegion(spliced, []).trim(), handWritten.trim())
 check('an empty-list placeholder is replaced, not appended to',

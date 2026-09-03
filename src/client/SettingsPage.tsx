@@ -54,13 +54,13 @@ class SettingsBoundary extends Component<{ children: React.ReactNode }, { failed
     return { failed: true }
   }
   componentDidCatch(error: Error) {
-    console.error('[dsh-dev-tool-ext] the settings page crashed:', error)
+    console.error('[dsh-ext] the settings page crashed:', error)
   }
   render() {
     if (this.state.failed) {
       return (
         <Notice kind="error">
-          [dsh-dev-tool-ext] 设置页渲染出错：请重启 DeepSeek Harness 让插件前后端版本一致；若仍复现，请把控制台报错反馈给插件作者。
+          [dsh-ext] 设置页渲染出错：请重启 DeepSeek Harness 让插件前后端版本一致；若仍复现，请把控制台报错反馈给插件作者。
         </Notice>
       )
     }
@@ -133,7 +133,7 @@ export function SettingsPage() {
   const currentModelKey = `${c.commandReview.provider}::${c.commandReview.model}`
 
   return (
-    <div style={{ padding: '0 4px 24px', color: token.text }} data-dsh-plugin="dsh-dev-tool-ext">
+    <div style={{ padding: '0 4px 24px', color: token.text }} data-dsh-plugin="dsh-ext">
       {!view.writable && (
         <div style={{ paddingTop: 12 }}>
           <Notice kind="info">

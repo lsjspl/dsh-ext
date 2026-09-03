@@ -62,7 +62,7 @@ export type ModelPickerProps = Omit<ModelSelectInjected, 't'> & {
 type Pane = 'root' | 'model' | 'effort'
 
 /** Persisted collapse state, so the menu reopens the way it was left. */
-const COLLAPSE_KEY = 'dsh-dev-tool-ext:model-groups-collapsed'
+const COLLAPSE_KEY = 'dsh-ext:model-groups-collapsed'
 
 function readCollapsed(): ReadonlySet<string> {
   try {
@@ -279,7 +279,7 @@ export function ModelPicker(props: ModelPickerProps) {
       style={fb?.root}
       onKeyDown={onRootKeyDown}
       onBlur={onBlur}
-      data-dsh-plugin="dsh-dev-tool-ext"
+      data-dsh-plugin="dsh-ext"
       data-dsh-part="model-picker"
     >
       <button

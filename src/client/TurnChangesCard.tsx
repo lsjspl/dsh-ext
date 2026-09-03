@@ -84,7 +84,7 @@ async function trashSession(sessionId: string, archive: (id: string) => Promise<
     await archive(sessionId)
     return true
   } catch (error: unknown) {
-    console.warn('[dsh-dev-tool-ext] archiving the original session failed:', error)
+    console.warn('[dsh-ext] archiving the original session failed:', error)
     return false
   }
 }
@@ -109,7 +109,7 @@ export class CardBoundary extends Component<{ children: ReactNode }, { failed: b
     return { failed: true, message: error.message }
   }
   componentDidCatch(error: Error, info: unknown) {
-    console.error('[dsh-dev-tool-ext] the turn-changes card crashed and hid itself:', error, info)
+    console.error('[dsh-ext] the turn-changes card crashed and hid itself:', error, info)
   }
   render() {
     if (this.state.failed) {
@@ -179,7 +179,7 @@ export function TurnChangesCard(props: {
   if (props.disabled === true || data === undefined) {
     return (
       <div
-        data-dsh-plugin="dsh-dev-tool-ext"
+        data-dsh-plugin="dsh-ext"
         data-dsh-part="turn-changes"
         style={{
           border: `1px solid color-mix(in srgb, ${token.border} 60%, transparent)`,
@@ -304,7 +304,7 @@ export function TurnChangesCard(props: {
   return (
     <>
       <div
-        data-dsh-plugin="dsh-dev-tool-ext"
+        data-dsh-plugin="dsh-ext"
         data-dsh-part="turn-changes"
         style={{
           border: `1px solid ${token.border}`,

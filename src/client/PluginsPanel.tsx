@@ -97,10 +97,10 @@ export function PluginsPanel(props: { enabled: boolean }) {
           lineHeight: 1.6,
           fontFamily: 'ui-monospace, monospace',
           whiteSpace: 'pre-wrap',
-        }}>{`npx dsh-plugin-dev-tool-ext dsh-ext safe      # start without any third-party plugin
-npx dsh-plugin-dev-tool-ext dsh-ext skip <name>   # skip one plugin
-npx dsh-plugin-dev-tool-ext dsh-ext uninstall <name>
-npx dsh-plugin-dev-tool-ext dsh-ext restore       # re-enable everything`}</pre>
+        }}>{`npx dsh-ext safe        # start without any third-party plugin
+npx dsh-ext skip <name>     # skip one plugin
+npx dsh-ext uninstall <name>
+npx dsh-ext restore         # re-enable everything`}</pre>
         <p style={{ fontSize: 11, color: token.textMuted, margin: '6px 0 0' }}>
           {t('plugins.rescueFile', { file: view.data?.quarantineFile ?? '$DSH_HOME/cordis.patch.yml' })}
         </p>

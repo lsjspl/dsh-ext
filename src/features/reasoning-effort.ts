@@ -298,7 +298,7 @@ export function mountReasoningEffort(
     } catch (error: unknown) {
       // A concurrent Models-page write wins. The next directory update or page
       // read retries from the fresh revision rather than clobbering it.
-      ctx.logger('dsh-dev-tool-ext').warn('could not apply default model capabilities: %o', error)
+      ctx.logger('dsh-ext').warn('could not apply default model capabilities: %o', error)
     }
   }
 

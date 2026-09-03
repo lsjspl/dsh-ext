@@ -65,7 +65,7 @@ export async function rewindTurn(props: {
         props.sessions.open(childId as never)
         return { ok: true, childId, fresh: true }
       } catch (startError: unknown) {
-        console.warn('[dsh-dev-tool-ext] starting the fresh session failed:', startError)
+        console.warn('[dsh-ext] starting the fresh session failed:', startError)
         return { ok: false, reason: 'new-session-failed', message: startError instanceof Error ? startError.message : String(startError) }
       }
     }
@@ -81,7 +81,7 @@ export async function rewindTurn(props: {
     props.sessions.open(childId as never)
     return { ok: true, childId: String(childId), fresh: false }
   } catch (forkError: unknown) {
-    console.warn('[dsh-dev-tool-ext] the chat fork after restore failed:', forkError)
+    console.warn('[dsh-ext] the chat fork after restore failed:', forkError)
     return {
       ok: false,
       reason: 'fork-failed',
@@ -100,7 +100,7 @@ export async function resendEditedQuestion(
   const sent = await binding?.session
     .prompt([{ type: 'text', text }], 'queue')
     .catch((promptError: unknown) => {
-      console.warn('[dsh-dev-tool-ext] re-sending the edited question failed:', promptError)
+      console.warn('[dsh-ext] re-sending the edited question failed:', promptError)
       return undefined
     })
   if (sent === undefined || sent.ok !== true) {
