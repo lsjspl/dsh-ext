@@ -92,6 +92,9 @@ export interface ExplorerStatus {
   readonly ahead?: number
   readonly behind?: number
   readonly changes: readonly ChangeEntry[]
+  readonly workspace?: string
+  readonly root?: string
+  readonly name?: string
 }
 
 /** One file's content, as the `/explorer/file` viewer returns it. */
@@ -105,6 +108,12 @@ export interface FileView {
   /** True when the file was longer than the line cap and only its head came back. */
   readonly truncated: boolean
   readonly bytes: number
+  readonly isImage?: boolean
+  readonly imageUrl?: string
+  readonly isVideo?: boolean
+  readonly isAudio?: boolean
+  readonly mediaUrl?: string
+  readonly isBinary?: boolean
 }
 
 /** What `/explorer/open-editor` answers: whether a launcher was spawned. */
@@ -123,6 +132,10 @@ export interface ReviewDiff {
   readonly path: string
   readonly oldText: string | null
   readonly newText: string
+  readonly isImage?: boolean
+  readonly isBinary?: boolean
+  readonly oldImageUrl?: string
+  readonly newImageUrl?: string
   /** Lines added versus HEAD, when countable (absent for binary files). */
   readonly added?: number
   /** Lines removed versus HEAD, same caveat as `added`. */

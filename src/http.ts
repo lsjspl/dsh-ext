@@ -7,6 +7,7 @@ export { API_PREFIX }
 
 export interface ApiRequest {
   readonly req: IncomingMessage
+  readonly res: ServerResponse
   /** Path after {@link API_PREFIX}, always leading-slash, never empty. */
   readonly route: string
   readonly method: string
@@ -127,13 +128,16 @@ export function serveApi(ctx: Context, routes: Readonly<Record<string, ApiHandle
         const body = await readJsonBody(req)
         const value = await handler({
           req,
+          res,
           route,
           method: req.method ?? 'GET',
           query: url.searchParams,
           body,
         })
+        if (res.headersSent) return
         send(200, { ok: true, value: value ?? null })
       } catch (error: unknown) {
+        if (res.headersSent) return
         if (error instanceof ApiError) {
           send(error.status, { ok: false, message: error.message })
           return

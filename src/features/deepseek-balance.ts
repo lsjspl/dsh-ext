@@ -148,26 +148,36 @@ export function balanceRoutes(ctx: Context, config: () => Config): Record<string
   }
 
   return {
-    '/balance': async ({ query, req }) => {
+    '/balance': async ({ query }) => {
       const settings = config().deepseekBalance
       if (!settings.enabled) throw new ApiError(404, 'the balance feature is switched off')
 
       const force = query.get('refresh') === '1'
       const ttl = settings.cacheTtlSeconds * 1000
-      if (!force && cached !== undefined && Date.now() - cached.fetchedAt < ttl) return cached
+      const now = Date.now()
+      // If cached and fresh (or force-refreshed less than 5 seconds ago), return cache
+      if (cached !== undefined && (!force && now - cached.fetchedAt < ttl || force && now - cached.fetchedAt < 5000)) {
+        return cached
+      }
 
       // Collapse concurrent asks onto one request: the settings page and the
       // header badge mounting together must not open two connections.
       if (inFlight === undefined) {
         const controller = new AbortController()
-        req.on('close', () => { controller.abort() })
+        // Let fetch complete and populate cache even if one connection closed
         inFlight = fetchBalance(controller.signal)
         inFlight
           .then((value) => { cached = value })
-          .catch(() => { /* the awaiting caller reports it */ })
+          .catch(() => { /* handled below */ })
           .finally(() => { inFlight = undefined })
       }
-      return await inFlight
+      try {
+        return await inFlight
+      } catch (err) {
+        // Fallback to cached data if available rather than failing the UI
+        if (cached !== undefined) return cached
+        throw err
+      }
     },
   }
 }

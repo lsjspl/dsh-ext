@@ -121,27 +121,39 @@ function ReviewRow(props: {
 }) {
   const t = useT()
   const { change, counts } = props
+  const statusLetter = change.staged ? change.index : change.worktree
+  const statusColor = change.untracked
+    ? token.textMuted
+    : statusLetter === 'A'
+      ? token.success
+      : statusLetter === 'D'
+        ? token.danger
+        : token.accent
+
   return (
     <li>
       <button
         type="button"
         onClick={() => { props.onOpenDiff(change.path) }}
-        title={t('explorer.preview')}
+        title={`${change.path} (${describeChange(change, t)})`}
         style={{ ...rowStyle, paddingLeft: 4 + props.depth * INDENT }}
       >
         <span
           aria-hidden="true"
           style={{
             fontFamily: 'ui-monospace, monospace',
-            fontSize: 13,
-            color: change.untracked ? token.textMuted : token.accent,
+            fontSize: 12,
+            fontWeight: 600,
+            color: statusColor,
+            width: 18,
+            textAlign: 'center',
             flex: '0 0 auto',
           }}
         >
           {change.index}{change.worktree}
         </span>
         <FileIcon size={16} name={baseOf(change.path)} />
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13.5, color: token.text }}>
           {change.from !== undefined && (
             <span style={{ color: token.textMuted }}>{change.from} → </span>
           )}
@@ -149,9 +161,6 @@ function ReviewRow(props: {
         </span>
         {counts?.added !== undefined && <span style={countAddedStyle}>+{counts.added}</span>}
         {counts?.removed !== undefined && <span style={countRemovedStyle}>-{counts.removed}</span>}
-        <span style={{ fontSize: 12, color: token.textMuted, flex: '0 0 auto' }}>
-          {describeChange(change, t)}
-        </span>
       </button>
     </li>
   )
@@ -225,9 +234,9 @@ function FolderRow(props: {
         onClick={() => { props.onToggle(node.path) }}
         style={{ ...rowStyle, paddingLeft: 4 + depth * INDENT }}
       >
-        <ChevronIcon size={14} open={open} />
+        <ChevronIcon size={13} open={open} />
         <FolderIcon size={16} open={open} />
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.name}</span>
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13.5, color: token.text }}>{node.name}</span>
         {counts?.added !== undefined && <span style={countAddedStyle}>+{counts.added}</span>}
         {counts?.removed !== undefined && <span style={countRemovedStyle}>-{counts.removed}</span>}
       </button>
@@ -314,10 +323,10 @@ export function ReviewView(props: { status: ExplorerStatus; onOpenDiff: (path: s
   }, [])
 
   if (!props.status.isRepository) {
-    return <div style={{ fontSize: 14, color: token.textMuted, padding: '8px 0' }}>{t('explorer.noRepo')}</div>
+    return <div style={{ fontSize: 12, color: token.textMuted, padding: '16px 8px', textAlign: 'center' }}>{t('explorer.noRepo')}</div>
   }
   if (changes.length === 0) {
-    return <div style={{ fontSize: 14, color: token.textMuted, padding: '8px 0' }}>{t('explorer.noChanges')}</div>
+    return <div style={{ fontSize: 12, color: token.textMuted, padding: '16px 8px', textAlign: 'center' }}>{t('explorer.noChanges')}</div>
   }
 
   return (
@@ -325,20 +334,14 @@ export function ReviewView(props: { status: ExplorerStatus; onOpenDiff: (path: s
       <div
         style={{
           display: 'flex',
-          gap: 4,
+          gap: 5,
           alignItems: 'center',
           flexWrap: 'wrap',
-          // The panel scrolls the whole view (the file browser and review list
-          // share that overflow container), so the filter row would ride away
-          // with the list. Sticky keeps it pinned to the top of the panel while
-          // the list scrolls underneath. Needs an opaque background so a list
-          // row passing under it does not show through the gaps between
-          // buttons, and a z-index to sit above those rows.
           position: 'sticky',
           top: 0,
           zIndex: 1,
-          background: token.surfaceBase,
-          padding: '2px 0',
+          background: 'var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, #1c1c1f))',
+          padding: '2px 0 4px',
         }}
       >
         {FILTERS.map(name => {
@@ -351,10 +354,19 @@ export function ReviewView(props: { status: ExplorerStatus; onOpenDiff: (path: s
               aria-pressed={active}
               style={{
                 ...buttonStyle,
-                fontSize: 13,
-                padding: '4px 12px',
-                borderColor: active ? token.accent : token.border,
-                color: active ? token.accent : token.text,
+                fontSize: 12.5,
+                padding: '4px 10px',
+                borderRadius: 6,
+                fontWeight: active ? 600 : 400,
+                background: active
+                  ? 'var(--dsw-alias-state-business-primary, #2563eb)'
+                  : 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))',
+                borderColor: active
+                  ? 'var(--dsw-alias-state-business-primary, #2563eb)'
+                  : token.border,
+                color: active ? '#ffffff' : token.textMuted,
+                boxShadow: active ? '0 1px 2px rgba(0, 0, 0, 0.08)' : 'none',
+                transition: 'all 120ms ease',
               }}
             >
               {t(filterKey(name))} {sideCounts[name]}
@@ -374,21 +386,23 @@ export function ReviewView(props: { status: ExplorerStatus; onOpenDiff: (path: s
             width: 26,
             height: 26,
             padding: 0,
-            border: 'none',
+            border: `1px solid ${token.border}`,
             borderRadius: 6,
-            background: 'transparent',
+            background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))',
             color: token.textMuted,
             cursor: 'pointer',
             flex: '0 0 auto',
+            transition: 'all 120ms ease',
           }}
+          onMouseEnter={e => { e.currentTarget.style.color = token.text; e.currentTarget.style.background = token.hover }}
+          onMouseLeave={e => { e.currentTarget.style.color = token.textMuted; e.currentTarget.style.background = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))' }}
         >
-          {/* The icon names the view a click SWITCHES to, like every editor's layout toggle. */}
-          {grouped ? <FilesIcon size={16} /> : <FolderIcon size={16} open={false} />}
+          {grouped ? <FilesIcon size={15} /> : <FolderIcon size={15} open={false} />}
         </button>
       </div>
 
       {filtered.length === 0 ? (
-        <div style={{ fontSize: 14, color: token.textMuted, padding: '8px 0' }}>{t('explorer.noChanges')}</div>
+        <div style={{ fontSize: 13, color: token.textMuted, padding: '16px 8px', textAlign: 'center' }}>{t('explorer.noChanges')}</div>
       ) : grouped && tree !== undefined ? (
         <ul style={treeStyle}>
           <FolderNodes node={tree} depth={0} collapsed={collapsed} onToggle={onToggle} countsFor={rowCounts} onOpenDiff={props.onOpenDiff} />

@@ -16,6 +16,7 @@
 interface IconProps {
   /** Edge length in px; the viewBox is square. */
   readonly size?: number
+  readonly style?: React.CSSProperties
 }
 
 /** The host's 28px circular icon-button chrome, so plugin toggles match it. */
@@ -123,7 +124,7 @@ export function ChevronIcon(props: IconProps & { readonly open: boolean }) {
 export function CheckIcon(props: IconProps) {
   const size = props.size ?? 16
   return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true" style={props.style}>
       <path
         d="M3.2 8.6L6.1 11.5L12.8 4.8"
         stroke="currentColor"
@@ -134,6 +135,7 @@ export function CheckIcon(props: IconProps) {
     </svg>
   )
 }
+
 
 /** A plus, for the tab strip's "add a view" launcher. */
 export function PlusIcon(props: IconProps) {
@@ -212,7 +214,7 @@ export function EditIcon(props: IconProps) {
 export function FolderIcon(props: IconProps) {
   const size = props.size ?? 16
   return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true" style={props.style}>
       <path
         d="M2 3.5C2 2.67 2.67 2 3.5 2H6L7.5 3.5H12.5C13.33 3.5 14 4.17 14 5V12.5C14 13.33 13.33 14 12.5 14H3.5C2.67 14 2 13.33 2 12.5V3.5Z"
         fill="currentColor"
@@ -293,6 +295,17 @@ export function TrashIcon(props: IconProps) {
       <path d="M5.6 4.2V3.2C5.6 2.7 6.1 2.2 6.7 2.2H9.3C9.9 2.2 10.4 2.7 10.4 3.2V4.2" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
       <path d="M3.4 4.2L4.1 13.1C4.15 13.7 4.7 14.1 5.3 14.1H10.7C11.3 14.1 11.85 13.7 11.9 13.1L12.6 4.2" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
       <path d="M6.8 6.7V11.6M9.2 6.7V11.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** A copy-to-clipboard double page icon. */
+export function CopyIcon(props: IconProps) {
+  const size = props.size ?? 14
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="5" y="5" width="8" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M3.5 11H3C2.45 11 2 10.55 2 10V3C2 2.45 2.45 2 3 2H9C9.55 2 10 2.45 10 3V3.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
     </svg>
   )
 }

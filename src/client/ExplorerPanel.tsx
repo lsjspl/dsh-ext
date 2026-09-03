@@ -4,12 +4,13 @@ import { useResource } from './use-resource.ts'
 import { INDENT, Notice, rowStyle, token, buttonStyle } from './ui.tsx'
 import { useT } from './use-locale.ts'
 import { FileIcon, FolderIcon } from './file-icons.tsx'
-import { ChevronIcon, CloseIcon, FilesIcon, GitIcon, PlusIcon, VscodeIcon, IdeaIcon, FolderIcon as FolderGlyph, iconButtonStyle } from './icons.tsx'
+import { ChevronIcon, CloseIcon, CopyIcon, CheckIcon, FilesIcon, GitIcon, PlusIcon, VscodeIcon, IdeaIcon, FolderIcon as FolderGlyph, iconButtonStyle } from './icons.tsx'
 import { useTabs, bindPanelTabs, type Tab, type TabKind } from './tabs.ts'
+import { setPanelOpen } from './panel-state.ts'
 import { callApi } from './api.ts'
 import { CodeView, DiffView } from './DiffView.tsx'
 import { ReviewView } from './ReviewView.tsx'
-import type { ExplorerStatus, FileView, OpenEditorResult, TreeEntry } from '../shared/api-contract.ts'
+import { API_PREFIX, type ExplorerStatus, type FileView, type OpenEditorResult, type TreeEntry } from '../shared/api-contract.ts'
 
 /**
  * Feature 5 — the project explorer: a tabbed panel holding the workspace's file
@@ -34,8 +35,127 @@ import type { ExplorerStatus, FileView, OpenEditorResult, TreeEntry } from '../s
 
 interface TreeResponse {
   readonly workspace: string
+  readonly root?: string
+  readonly name?: string
   readonly path: string
   readonly entries: readonly TreeEntry[]
+}
+
+/**
+ * Prominent project path bar displayed at the top of both Files and Review pages.
+ * Shows project folder name, canonical path, 1-click copy, and open folder button.
+ */
+export function ProjectPathBar(props: {
+  root?: string
+  name?: string
+  workspace?: string
+  scope?: string
+}) {
+  const [copied, setCopied] = useState(false)
+  const fullPath = props.root ?? props.workspace ?? ''
+  const projectName = props.name ?? (fullPath ? fullPath.split(/[\\/]/).filter(Boolean).pop() : '') ?? ''
+
+  const handleCopy = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!fullPath) return
+    navigator.clipboard.writeText(fullPath).then(() => {
+      setCopied(true)
+      setTimeout(() => { setCopied(false) }, 1500)
+    })
+  }, [fullPath])
+
+  const handleOpenFolder = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    const query = props.scope ? `?editor=explorer&${props.scope}` : '?editor=explorer'
+    callApi(`/explorer/open-editor${query}`, { method: 'POST' }).catch((err) => {
+      console.warn('Failed to open file explorer:', err)
+    })
+  }, [props.scope])
+
+  if (!fullPath && !projectName) return null
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '5px 8px',
+        marginBottom: 6,
+        borderRadius: 6,
+        background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))',
+        border: `1px solid ${token.border}`,
+        fontSize: 12,
+        lineHeight: '18px',
+        gap: 6,
+        flex: '0 0 auto',
+      }}
+    >
+      <div
+        title={fullPath}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          minWidth: 0,
+          flex: 1,
+          overflow: 'hidden',
+        }}
+      >
+        <FolderGlyph size={15} style={{ flex: '0 0 auto', color: 'var(--dsw-alias-state-business-primary, #3b82f6)' }} />
+        <span style={{ fontWeight: 600, color: token.text, flex: '0 0 auto' }}>
+          {projectName}
+        </span>
+        <span
+          style={{
+            color: token.textMuted,
+            fontSize: 11,
+            fontFamily: 'ui-monospace, monospace',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {fullPath}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: '0 0 auto' }}>
+        <button
+          type="button"
+          onClick={handleCopy}
+          title={copied ? '已复制项目路径' : '复制项目完整路径'}
+          style={{
+            ...iconButtonStyle,
+            width: 22,
+            height: 22,
+            borderRadius: 4,
+            color: copied ? token.success : token.textMuted,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = token.hover }}
+          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
+        >
+          {copied ? <CheckIcon size={13} style={{ color: token.success }} /> : <CopyIcon size={13} />}
+        </button>
+        <button
+          type="button"
+          onClick={handleOpenFolder}
+          title="在系统文件资源管理器中打开"
+          style={{
+            ...iconButtonStyle,
+            width: 22,
+            height: 22,
+            borderRadius: 4,
+            color: token.textMuted,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = token.hover }}
+          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
+        >
+          <FolderGlyph size={13} />
+        </button>
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -85,10 +205,10 @@ function baseOf(path: string): string {
 }
 
 /** Secondary text: row sizes, meta beside a title. */
-const metaStyle = { fontSize: 13, color: token.textMuted } as const
+const metaStyle = { fontSize: 12, color: token.textMuted, fontFamily: 'ui-monospace, monospace' } as const
 
 /** Corner notes: truncation and per-list footnotes. */
-const noteStyle = { fontSize: 12, color: token.textMuted } as const
+const noteStyle = { fontSize: 11.5, color: token.textMuted } as const
 
 const treeStyle = { listStyle: 'none', margin: 0, padding: 0 } as const
 
@@ -126,12 +246,12 @@ function TreeRow(props: {
       style={{ ...rowStyle, paddingLeft: 4 + depth * INDENT }}
     >
       {entry.kind === 'directory'
-        ? <ChevronIcon size={14} open={open} />
-        : <span aria-hidden="true" style={{ width: 14, flex: '0 0 auto' }} />}
+        ? <ChevronIcon size={13} open={open} />
+        : <span aria-hidden="true" style={{ width: 13, flex: '0 0 auto' }} />}
       {entry.kind === 'directory'
         ? <FolderIcon size={16} open={open} />
         : <FileIcon size={16} name={entry.name} />}
-      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{entry.name}</span>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 13.5, color: token.text }}>{entry.name}</span>
       {entry.kind === 'file' && <span style={metaStyle}>{formatSize(entry.size)}</span>}
     </button>
   )
@@ -223,6 +343,198 @@ function FilesView(props: { workspace: string | undefined; sessionId: string | u
   )
 }
 
+/** Image preview component with checkerboard transparency background and dimension metadata. */
+function ImageViewer(props: { url: string; name: string; bytes: number }) {
+  const [dimensions, setDimensions] = useState<{ w: number; h: number } | null>(null)
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center', padding: '12px 6px' }}>
+      <div
+        style={{
+          width: '100%',
+          maxWidth: '100%',
+          minHeight: 200,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+          borderRadius: 8,
+          border: `1px solid ${token.border}`,
+          backgroundImage: 'linear-gradient(45deg, rgba(125, 125, 125, 0.12) 25%, transparent 25%), linear-gradient(-45deg, rgba(125, 125, 125, 0.12) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(125, 125, 125, 0.12) 75%), linear-gradient(-45deg, transparent 75%, rgba(125, 125, 125, 0.12) 75%)',
+          backgroundSize: '16px 16px',
+          backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
+          backgroundColor: 'var(--dsw-alias-bg-base, rgba(0, 0, 0, 0.04))',
+        }}
+      >
+        <img
+          src={props.url}
+          alt={props.name}
+          onLoad={(e) => {
+            const img = e.currentTarget
+            setDimensions({ w: img.naturalWidth, h: img.naturalHeight })
+          }}
+          style={{
+            maxWidth: '100%',
+            maxHeight: 520,
+            objectFit: 'contain',
+            borderRadius: 4,
+            boxShadow: '0 2px 10px rgba(0, 0, 0, 0.18)',
+          }}
+        />
+      </div>
+
+      <div style={{ fontSize: 12, color: token.textMuted, fontFamily: 'ui-monospace, monospace', display: 'flex', gap: 8, alignItems: 'center' }}>
+        {dimensions !== null && (
+          <>
+            <span>{dimensions.w} × {dimensions.h} px</span>
+            <span>·</span>
+          </>
+        )}
+        <span>{formatSize(props.bytes)}</span>
+      </div>
+    </div>
+  )
+}
+
+/** Video player component with native playback controls, resolution and duration metadata. */
+function VideoPlayer(props: { url: string; name: string; bytes: number }) {
+  const [meta, setMeta] = useState<{ w: number; h: number; duration: number } | null>(null)
+
+  const formatDuration = (seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds <= 0) return '0:00'
+    const mins = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center', padding: '12px 6px' }}>
+      <div
+        style={{
+          width: '100%',
+          maxWidth: '100%',
+          minHeight: 220,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 8,
+          borderRadius: 8,
+          border: `1px solid ${token.border}`,
+          backgroundColor: '#000',
+        }}
+      >
+        <video
+          src={props.url}
+          controls
+          playsInline
+          preload="metadata"
+          onLoadedMetadata={(e) => {
+            const v = e.currentTarget
+            setMeta({ w: v.videoWidth, h: v.videoHeight, duration: v.duration })
+          }}
+          style={{
+            maxWidth: '100%',
+            maxHeight: 520,
+            borderRadius: 4,
+            outline: 'none',
+          }}
+        />
+      </div>
+
+      <div style={{ fontSize: 12, color: token.textMuted, fontFamily: 'ui-monospace, monospace', display: 'flex', gap: 8, alignItems: 'center' }}>
+        {meta !== null && (
+          <>
+            <span>{meta.w} × {meta.h} px</span>
+            <span>·</span>
+            <span>{formatDuration(meta.duration)}</span>
+            <span>·</span>
+          </>
+        )}
+        <span>{formatSize(props.bytes)}</span>
+      </div>
+    </div>
+  )
+}
+
+/** Audio player component with native playback controls. */
+function AudioPlayer(props: { url: string; name: string; bytes: number }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '36px 16px',
+        gap: 12,
+        borderRadius: 8,
+        border: `1px solid ${token.border}`,
+        background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.04))',
+        margin: '12px 0',
+      }}
+    >
+      <FileIcon size={40} name={props.name} />
+      <div style={{ fontSize: 13, fontWeight: 600, color: token.text }}>
+        {props.name}
+      </div>
+      <div style={{ fontSize: 12, color: token.textMuted }}>
+        {formatSize(props.bytes)}
+      </div>
+      <audio
+        src={props.url}
+        controls
+        preload="metadata"
+        style={{ width: '100%', maxWidth: 360, marginTop: 8 }}
+      />
+    </div>
+  )
+}
+
+/** Binary file card with one-click external launcher. */
+function BinaryFileView(props: { name: string; bytes: number; onOpen: () => void }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '48px 16px',
+        gap: 12,
+        borderRadius: 8,
+        border: `1px dashed ${token.border}`,
+        background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.04))',
+        margin: '16px 0',
+      }}
+    >
+      <FileIcon size={36} name={props.name} />
+      <div style={{ fontSize: 13, fontWeight: 600, color: token.text }}>
+        {props.name}
+      </div>
+      <div style={{ fontSize: 12, color: token.textMuted, textAlign: 'center', maxWidth: 320, lineHeight: '18px' }}>
+        该文件为二进制文件 ({formatSize(props.bytes)})，无法以纯文本代码显示。请使用系统默认程序或 IDE 打开。
+      </div>
+      <button
+        type="button"
+        onClick={props.onOpen}
+        style={{
+          ...buttonStyle,
+          fontSize: 12,
+          padding: '5px 14px',
+          borderRadius: 6,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          marginTop: 6,
+        }}
+      >
+        <FolderGlyph size={14} />
+        <span>在外部程序中打开</span>
+      </button>
+    </div>
+  )
+}
+
 /**
  * The editor tab: one file's content, read-only.
  *
@@ -258,7 +570,7 @@ function EditorView(props: { path: string; scope: string }) {
     return <Notice kind="error">{t('explorer.viewFailed', { message: file.error })}</Notice>
   }
   if (file.data === undefined) {
-    return <div style={{ fontSize: 14, color: token.textMuted }}>{t('common.loading')}</div>
+    return <div style={{ fontSize: 12, color: token.textMuted, padding: '16px 8px', textAlign: 'center' }}>{t('common.loading')}</div>
   }
 
   return (
@@ -267,34 +579,28 @@ function EditorView(props: { path: string; scope: string }) {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 8,
-          // The panel scrolls the whole view, so the header row (path, size,
-          // and the "open" menu) would ride away with the file content. Sticky
-          // pins it to the top while the content below scrolls — the same
-          // treatment the review list's filter row gets. An opaque background
-          // hides content passing underneath, and a z-index keeps it above them.
+          gap: 7,
           position: 'sticky',
           top: 0,
           zIndex: 1,
-          background: token.surfaceBase,
-          padding: '6px 0 2px',
-          margin: '-6px 0 0',
+          background: 'var(--dsw-alias-bg-module-platform, var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08)))',
+          border: `1px solid ${token.border}`,
+          borderRadius: 6,
+          padding: '5px 9px',
+          margin: '0 0 5px',
         }}
       >
+        <FileIcon size={15} name={baseOf(props.path)} />
         <span
           title={props.path}
-          style={{ fontSize: 13, color: token.textMuted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          style={{ fontSize: 13, fontWeight: 500, color: token.text, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
         >{props.path}</span>
-        <span style={noteStyle}>{formatSize(file.data.bytes)}</span>
+        <span style={{ fontSize: 12, color: token.textMuted, fontFamily: 'ui-monospace, monospace' }}>{formatSize(file.data.bytes)}</span>
         <Menu
           open={menuOpen}
           onClose={() => { setMenuOpen(false) }}
           onSelect={(id) => { void openExternal(id as 'explorer' | 'vscode' | 'idea') }}
           align="end"
-          // The panel scrolls inside an overflow container, which crops an
-          // in-place list (the menu would be cut at the panel edge). Portal
-          // renders the list into the body, fixed-positioned from the anchor
-          // rect, so the three "open in" rows are never clipped.
           portal
           items={[
             { id: 'explorer', label: t('explorer.openWith.explorer'), icon: <FolderGlyph size={14} /> },
@@ -308,7 +614,7 @@ function EditorView(props: { path: string; scope: string }) {
               title={t('explorer.openEditor')}
               aria-expanded={menuOpen}
               onClick={() => { setMenuOpen(value => !value) }}
-              style={{ ...buttonStyle, height: 22, minHeight: 0, padding: '0 7px', fontSize: 12, borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+              style={{ ...buttonStyle, height: 24, minHeight: 0, padding: '0 8px', fontSize: 12, borderRadius: 5, display: 'inline-flex', alignItems: 'center', gap: 4 }}
             >
               <span>{t('turn.open')}</span>
               <ChevronIcon size={11} open={menuOpen} />
@@ -316,9 +622,37 @@ function EditorView(props: { path: string; scope: string }) {
           }
         />
       </div>
-      <CodeView path={props.path} content={file.data.content} />
-      {file.data.truncated && (
-        <div style={noteStyle}>{t('explorer.truncatedFile', { lines: file.data.content.split('\n').length })}</div>
+      {file.data.isVideo ? (
+        <VideoPlayer
+          url={file.data.mediaUrl && file.data.mediaUrl.includes('&') ? file.data.mediaUrl : `${API_PREFIX}/explorer/raw?path=${encodeURIComponent(props.path)}${props.scope.length === 0 ? '' : `&${props.scope}`}`}
+          name={baseOf(props.path)}
+          bytes={file.data.bytes}
+        />
+      ) : file.data.isAudio ? (
+        <AudioPlayer
+          url={file.data.mediaUrl && file.data.mediaUrl.includes('&') ? file.data.mediaUrl : `${API_PREFIX}/explorer/raw?path=${encodeURIComponent(props.path)}${props.scope.length === 0 ? '' : `&${props.scope}`}`}
+          name={baseOf(props.path)}
+          bytes={file.data.bytes}
+        />
+      ) : file.data.isImage && (file.data.imageUrl || file.data.mediaUrl) ? (
+        <ImageViewer
+          url={file.data.imageUrl ?? `${API_PREFIX}/explorer/raw?path=${encodeURIComponent(props.path)}${props.scope.length === 0 ? '' : `&${props.scope}`}`}
+          name={baseOf(props.path)}
+          bytes={file.data.bytes}
+        />
+      ) : file.data.isBinary ? (
+        <BinaryFileView
+          name={baseOf(props.path)}
+          bytes={file.data.bytes}
+          onOpen={() => { void openExternal('explorer') }}
+        />
+      ) : (
+        <>
+          <CodeView path={props.path} content={file.data.content} />
+          {file.data.truncated && (
+            <div style={noteStyle}>{t('explorer.truncatedFile', { lines: file.data.content.split('\n').length })}</div>
+          )}
+        </>
       )}
       {failure !== undefined && (
         <Toast key={failure.seq} text={failure.text} onDone={() => { setFailure(undefined) }} />
@@ -371,21 +705,25 @@ function TabStrip(props: {
               alignItems: 'center',
               gap: 6,
               maxWidth: '38%',
-              padding: '6px 7px 6px 10px',
+              padding: '5px 9px 5px 10px',
               borderRadius: 6,
-              fontSize: 14,
+              fontSize: 13,
+              lineHeight: '20px',
+              fontWeight: active ? 500 : 400,
               cursor: 'pointer',
               userSelect: 'none',
               color: active ? token.text : token.textMuted,
-              background: active ? token.hover : 'transparent',
+              background: active ? 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))' : 'transparent',
               border: `1px solid ${active ? token.border : 'transparent'}`,
+              boxShadow: active ? '0 1px 2px rgba(0, 0, 0, 0.05)' : 'none',
               flex: '0 1 auto',
               minWidth: 0,
+              transition: 'all 120ms ease',
             }}
           >
-            {tab.kind === 'files' && <FilesIcon size={16} />}
-            {(tab.kind === 'review' || tab.kind === 'diff') && <GitIcon size={16} />}
-            {tab.kind === 'editor' && <FileIcon size={16} name={baseOf(tab.path ?? '')} />}
+            {tab.kind === 'files' && <FilesIcon size={15} />}
+            {(tab.kind === 'review' || tab.kind === 'diff') && <GitIcon size={15} />}
+            {tab.kind === 'editor' && <FileIcon size={15} name={baseOf(tab.path ?? '')} />}
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
             <button
               type="button"
@@ -398,15 +736,20 @@ function TabStrip(props: {
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                padding: 2,
+                width: 18,
+                height: 18,
+                padding: 0,
                 border: 'none',
-                borderRadius: 4,
+                borderRadius: 3,
                 background: 'transparent',
                 color: 'inherit',
-                opacity: 0.6,
+                opacity: active ? 0.7 : 0.4,
                 cursor: 'pointer',
                 flex: '0 0 auto',
+                transition: 'all 100ms ease',
               }}
+              onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.background = 'rgba(125, 125, 125, 0.15)' }}
+              onMouseLeave={e => { e.currentTarget.style.opacity = active ? '0.7' : '0.4'; e.currentTarget.style.background = 'transparent' }}
             >
               <CloseIcon size={12} />
             </button>
@@ -418,13 +761,9 @@ function TabStrip(props: {
         onClose={() => { setMenuOpen(false) }}
         onSelect={(id) => {
           setMenuOpen(false)
-          // `openTab` focuses an already-open view instead of stacking a
-          // duplicate, so selecting `files` twice is harmless.
           props.onOpen(id === 'files' ? 'files' : 'review')
         }}
         align="start"
-        // The strip sits inside the panel's scroll column; an in-place list
-        // would be cropped by it, so the menu renders through a portal.
         portal
         items={[
           { type: 'label', id: 'views', text: t('explorer.views') },
@@ -438,9 +777,9 @@ function TabStrip(props: {
             title={t('explorer.newTab')}
             aria-expanded={menuOpen}
             onClick={() => { setMenuOpen(value => !value) }}
-            style={{ ...iconButtonStyle, width: 26, height: 26, flex: '0 0 auto' }}
+            style={{ ...iconButtonStyle, width: 26, height: 26, borderRadius: 6, flex: '0 0 auto' }}
           >
-            <PlusIcon size={16} />
+            <PlusIcon size={15} />
           </button>
         }
       />
@@ -471,16 +810,6 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
   const query = scope.length === 0 ? '' : `?${scope}`
   const status = useResource<ExplorerStatus>(`/explorer/status${query}`)
 
-  // The changes list is the one thing here that goes stale on its own: the agent
-  // edits files while the panel is open. A slow poll is enough — this is a
-  // read-only view, not a watcher.
-  //
-  // The timer is keyed to `query`, NOT to the resource. `useResource` hands back a
-  // fresh object whenever `data`/`error`/`loading` move, so depending on it (even
-  // on its `reload`) re-ran this effect on every settled fetch — and since a
-  // reload itself changes `loading`, each tick tore down and rebuilt the interval
-  // mid-flight. That is what turned one panel open into nine requests. `reload` is
-  // referentially stable, so reading it through a ref keeps the timer single.
   const reloadRef = useRef(status.reload)
   reloadRef.current = status.reload
   useEffect(() => {
@@ -488,15 +817,9 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
     return () => { window.clearInterval(timer) }
   }, [query])
 
-  // The VS Code launcher lives in the session header (see `index.tsx`), not in
-  // this toolbar: its target is the session's project, not a view of the panel.
-
   return (
-    // `flex: 1` and `minHeight: 0` together: the first claims the panel's full
-    // height instead of collapsing to content, the second lets the scrolling
-    // children shrink below their intrinsic size rather than overflowing it.
     <div data-dsh-plugin="dsh-ext" data-dsh-part="explorer" style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 0 }}>
-      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'space-between' }}>
         <TabStrip
           tabs={tabs}
           activeId={activeId}
@@ -504,22 +827,83 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
           onSelect={selectPanelTab}
           onClose={closePanelTab}
         />
-        {status.data?.branch !== undefined && (
-          <span style={{ ...metaStyle, flex: '0 0 auto' }}>
-            {status.data.branch}
-            {(status.data.ahead ?? 0) > 0 && ` ↑${status.data.ahead}`}
-            {(status.data.behind ?? 0) > 0 && ` ↓${status.data.behind}`}
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 0 auto' }}>
+          {status.data?.branch !== undefined && (
+            <div
+              title={`Git branch: ${status.data.branch}`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 12,
+                fontFamily: 'ui-monospace, monospace',
+                color: token.textMuted,
+                background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))',
+                border: `1px solid ${token.border}`,
+                borderRadius: 12,
+                padding: '3px 8px',
+                flex: '0 0 auto',
+                lineHeight: '18px',
+              }}
+            >
+              <GitIcon size={13} />
+              <span style={{ maxWidth: 88, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {status.data.branch}
+              </span>
+              {(status.data.ahead ?? 0) > 0 && <span style={{ color: token.success }}>↑{status.data.ahead}</span>}
+              {(status.data.behind ?? 0) > 0 && <span style={{ color: token.warn }}>↓{status.data.behind}</span>}
+            </div>
+          )}
+          {/* Dedicated Close Button for the Sidebar */}
+          <button
+            type="button"
+            aria-label="关闭侧边栏"
+            title="关闭侧边栏 (Esc)"
+            onClick={() => { setPanelOpen(false) }}
+            style={{
+              ...iconButtonStyle,
+              width: 24,
+              height: 24,
+              borderRadius: 6,
+              color: token.textMuted,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flex: '0 0 auto',
+              transition: 'all 120ms ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = token.text
+              e.currentTarget.style.backgroundColor = token.hover
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = token.textMuted
+              e.currentTarget.style.backgroundColor = 'transparent'
+            }}
+          >
+            <CloseIcon size={14} />
+          </button>
+        </div>
       </div>
 
       {status.error !== undefined && <Notice kind="error">{status.error}</Notice>}
 
-      <div style={{ overflow: 'auto', minHeight: 0 }}>
+      {/* 固定项目路径栏：位于滚动视口外部，无论文件列表如何滚动始终固定置顶 */}
+      {(active?.kind === 'review' || active?.kind === 'files') && (
+        <ProjectPathBar
+          root={status.data?.root}
+          name={status.data?.name}
+          workspace={props.workspace}
+          scope={scope}
+        />
+      )}
+
+      <div style={{ overflow: 'auto', minHeight: 0, flex: 1 }}>
         <ViewBoundary key={active?.id ?? 'none'}>
           {active?.kind === 'review' && (
             status.data === undefined
-              ? <div style={{ fontSize: 14, color: token.textMuted }}>{t('common.loading')}</div>
+              ? <div style={{ fontSize: 12, color: token.textMuted, padding: '16px 8px', textAlign: 'center' }}>{t('common.loading')}</div>
               : <ReviewView status={status.data} onOpenDiff={(path) => { openPanelTab('diff', path) }} />
           )}
           {active?.kind === 'files' && (

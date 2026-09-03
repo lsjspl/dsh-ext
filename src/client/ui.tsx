@@ -400,8 +400,13 @@ export const rowStyle: CSSProperties = {
   border: 'none',
   background: 'transparent',
   textAlign: 'left',
-  padding: '5px 6px',
-  fontSize: 15,
+  padding: '5px 8px',
+  fontSize: 13.5,
+  lineHeight: '22px',
+  borderRadius: 6,
+  color: token.text,
+  minHeight: 30,
+  transition: 'background 100ms ease, color 100ms ease',
 }
 
 /**

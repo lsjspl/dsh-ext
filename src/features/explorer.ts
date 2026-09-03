@@ -1,13 +1,14 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { spawn, exec } from 'node:child_process'
+import { createReadStream } from 'node:fs'
 import { readFile, readdir, realpath, stat } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve, sep, dirname, basename } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep, dirname, basename, extname } from 'node:path'
 import { promisify } from 'node:util'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
 import { git, hasGit, repositoryRoot, splitNul } from '../git.ts'
 import type { Config } from '../config.ts'
-import type { ChangeEntry, ExplorerStatus, TreeEntry } from '../shared/api-contract.ts'
+import type { ChangeEntry, ExplorerStatus, FileView, TreeEntry } from '../shared/api-contract.ts'
 
 const execAsync = promisify(exec)
 
@@ -125,33 +126,124 @@ function toLf(text: string): string {
  * stall the tab rather than show anything a person reads.
  */
 const MAX_VIEW_BYTES = 2 * 1024 * 1024
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+const IMAGE_MIMES = new Map<string, string>([
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.gif', 'image/gif'],
+  ['.webp', 'image/webp'],
+  ['.svg', 'image/svg+xml'],
+  ['.ico', 'image/x-icon'],
+  ['.bmp', 'image/bmp'],
+  ['.avif', 'image/avif'],
+])
+
+const VIDEO_MIMES = new Map<string, string>([
+  ['.mp4', 'video/mp4'],
+  ['.webm', 'video/webm'],
+  ['.ogg', 'video/ogg'],
+  ['.ogv', 'video/ogg'],
+  ['.mov', 'video/quicktime'],
+  ['.mkv', 'video/x-matroska'],
+  ['.m4v', 'video/x-m4v'],
+])
+
+const AUDIO_MIMES = new Map<string, string>([
+  ['.mp3', 'audio/mpeg'],
+  ['.wav', 'audio/wav'],
+  ['.ogg', 'audio/ogg'],
+  ['.m4a', 'audio/mp4'],
+  ['.flac', 'audio/flac'],
+  ['.aac', 'audio/aac'],
+])
+
+const MEDIA_MIMES = new Map<string, string>([
+  ...IMAGE_MIMES,
+  ...VIDEO_MIMES,
+  ...AUDIO_MIMES,
+])
 
 /**
  * Read one file for the viewer.
  *
- * Binary content is reported rather than sent. The test is the one every editor
- * uses — a NUL byte in the head of the file — because sniffing by extension
- * misses both an unlabelled binary and a perfectly readable file with an odd
- * suffix. Sending binary bytes as text would paint the panel with replacement
- * characters and let a multi-megabyte blob through as "text".
+ * Image, video, and audio files are served for visual/playback preview.
+ * Non-media binary files are flagged as `isBinary: true` for the UI to display
+ * an open-external card instead of failing with an error.
  */
-async function readTextFile(root: string, requested: string): Promise<{
-  path: string
-  content: string
-  language: string
-  truncated: boolean
-  bytes: number
-}> {
+async function readTextFile(root: string, requested: string, scopeSuffix = ''): Promise<FileView> {
   const absolute = await containedPath(root, requested)
   const info = await stat(absolute)
   if (info.isDirectory()) throw new ApiError(400, 'that path is a directory, not a file')
+
+  const ext = extname(requested).toLowerCase()
+  const imageMime = IMAGE_MIMES.get(ext)
+  const isVideo = VIDEO_MIMES.has(ext)
+  const isAudio = AUDIO_MIMES.has(ext)
+
+  // Support direct video playback!
+  if (isVideo) {
+    return {
+      path: requested,
+      content: '',
+      language: '',
+      truncated: false,
+      bytes: info.size,
+      isVideo: true,
+      mediaUrl: `/api/dsh-ext/explorer/raw?path=${encodeURIComponent(requested)}${scopeSuffix}`,
+    }
+  }
+
+  // Support direct audio playback!
+  if (isAudio) {
+    return {
+      path: requested,
+      content: '',
+      language: '',
+      truncated: false,
+      bytes: info.size,
+      isAudio: true,
+      mediaUrl: `/api/dsh-ext/explorer/raw?path=${encodeURIComponent(requested)}${scopeSuffix}`,
+    }
+  }
+
+  // Support direct image viewing!
+  if (imageMime !== undefined) {
+    if (info.size > MAX_IMAGE_BYTES) {
+      throw new ApiError(413, 'that image is too large to preview (>10MB)')
+    }
+    const buffer = await readFile(absolute)
+    const dataUrl = `data:${imageMime};base64,${buffer.toString('base64')}`
+    return {
+      path: requested,
+      content: ext === '.svg' ? toLf(buffer.toString('utf8')) : '',
+      language: ext === '.svg' ? 'xml' : '',
+      truncated: false,
+      bytes: info.size,
+      isImage: true,
+      imageUrl: dataUrl,
+      mediaUrl: `/api/dsh-ext/explorer/raw?path=${encodeURIComponent(requested)}${scopeSuffix}`,
+    }
+  }
+
   if (info.size > MAX_VIEW_BYTES) {
     throw new ApiError(413, 'that file is too large to preview')
   }
 
   const buffer = await readFile(absolute)
   const head = buffer.subarray(0, Math.min(buffer.length, 8000))
-  if (head.includes(0)) throw new ApiError(415, 'that file is binary, so there is nothing to show')
+  if (head.includes(0)) {
+    // Non-media binary file: return clean binary flag instead of crashing with 415
+    return {
+      path: requested,
+      content: '',
+      language: '',
+      truncated: false,
+      bytes: info.size,
+      isBinary: true,
+    }
+  }
 
   const text = toLf(buffer.toString('utf8'))
   const lines = text.split('\n')
@@ -951,6 +1043,8 @@ export function mountExplorer(
       const dir = await containedPath(root, query.get('path') ?? '')
       return {
         workspace: id,
+        root,
+        name: basename(root),
         path: toPosix(root, dir),
         entries: await listDirectory(root, dir, settings, controller.signal),
       }
@@ -961,7 +1055,12 @@ export function mountExplorer(
       const controller = new AbortController()
       req.on('close', () => { controller.abort() })
       const { id, root } = await resolveRoot(ctx, query.get('workspace'), query.get('session'), controller.signal)
-      return { workspace: id, ...await readStatus(root, controller.signal) }
+      return {
+        workspace: id,
+        root,
+        name: basename(root),
+        ...await readStatus(root, controller.signal),
+      }
     },
 
     '/explorer/diff': async ({ query, req }) => {
@@ -1007,9 +1106,29 @@ export function mountExplorer(
       try {
         const info = await stat(absolute)
         if (info.isFile()) {
+          const ext = extname(requested).toLowerCase()
+          const mimeType = IMAGE_MIMES.get(ext)
+          if (mimeType !== undefined) {
+            const buffer = await readFile(absolute)
+            return {
+              path: requested,
+              oldText: null,
+              newText: '',
+              isImage: true,
+              newImageUrl: `data:${mimeType};base64,${buffer.toString('base64')}`,
+            }
+          }
+
           if (info.size > MAX_VIEW_BYTES) throw new ApiError(413, 'that file is too large to review')
           const buffer = await readFile(absolute)
-          if (buffer.includes(0)) throw new ApiError(415, 'that file is binary, so there is nothing to review')
+          if (buffer.includes(0)) {
+            return {
+              path: requested,
+              oldText: null,
+              newText: '',
+              isBinary: true,
+            }
+          }
           newText = toLf(buffer.toString('utf8'))
         }
       } catch (error: unknown) {
@@ -1039,10 +1158,112 @@ export function mountExplorer(
       if (!config().explorer.enabled) throw new ApiError(404, 'the explorer is switched off')
       const controller = new AbortController()
       req.on('close', () => { controller.abort() })
-      const { root } = await resolveRoot(ctx, query.get('workspace'), query.get('session'), controller.signal)
+      const workspaceParam = query.get('workspace')
+      const sessionParam = query.get('session')
+      const { root } = await resolveRoot(ctx, workspaceParam, sessionParam, controller.signal)
       const requested = query.get('path')
       if (requested === null || requested.length === 0) throw new ApiError(400, 'a path is required')
-      return await readTextFile(root, requested)
+
+      const scopeParts = [
+        workspaceParam ? `workspace=${encodeURIComponent(workspaceParam)}` : null,
+        sessionParam ? `session=${encodeURIComponent(sessionParam)}` : null,
+      ].filter((p): p is string => p !== null)
+      const scopeSuffix = scopeParts.length > 0 ? `&${scopeParts.join('&')}` : ''
+
+      return await readTextFile(root, requested, scopeSuffix)
+    },
+
+    '/explorer/raw': async ({ req, res, query }) => {
+      if (!config().explorer.enabled) throw new ApiError(404, 'the explorer is switched off')
+      const controller = new AbortController()
+      req.on('close', () => { controller.abort() })
+      const requested = query.get('path')
+      if (requested === null || requested.length === 0) throw new ApiError(400, 'a path is required')
+
+      // 1. Try to find the file in the resolved workspace root
+      let targetFile: string | undefined
+      try {
+        const { root } = await resolveRoot(ctx, query.get('workspace'), query.get('session'), controller.signal)
+        const candidate = await containedPath(root, requested)
+        const st = await stat(candidate)
+        if (st.isFile()) targetFile = candidate
+      } catch {}
+
+      // 2. If not found in the primary workspace, search across all open workspaces as a fallback
+      if (!targetFile) {
+        for (const ws of workspaceRoots(ctx)) {
+          try {
+            const candidate = await containedPath(ws.root, requested)
+            const st = await stat(candidate)
+            if (st.isFile()) {
+              targetFile = candidate
+              break
+            }
+          } catch {}
+        }
+      }
+
+      if (!targetFile) throw new ApiError(404, 'that path could not be found in any workspace')
+
+      const info = await stat(targetFile)
+      const ext = extname(requested).toLowerCase()
+      const mime = MEDIA_MIMES.get(ext) ?? 'application/octet-stream'
+      const fileSize = info.size
+      const range = req.headers.range
+
+      if (range) {
+        const match = /bytes=(\d*)-(\d*)/.exec(range)
+        if (match) {
+          const rawStart = match[1]
+          const rawEnd = match[2]
+          let start = rawStart && rawStart.length > 0 ? parseInt(rawStart, 10) : 0
+          let end = rawEnd && rawEnd.length > 0 ? parseInt(rawEnd, 10) : fileSize - 1
+
+          if (isNaN(start)) start = 0
+          if (isNaN(end) || end >= fileSize) end = fileSize - 1
+
+          if (start >= fileSize || start > end) {
+            res.writeHead(416, {
+              'Content-Range': `bytes */${fileSize}`,
+            })
+            res.end()
+            return
+          }
+
+          const chunksize = (end - start) + 1
+          res.writeHead(206, {
+            'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': chunksize,
+            'Content-Type': mime,
+          })
+          const stream = createReadStream(targetFile, { start, end })
+          stream.on('error', () => {
+            if (!res.headersSent) {
+              res.writeHead(500)
+              res.end()
+            }
+          })
+          req.on('close', () => { stream.destroy() })
+          stream.pipe(res)
+          return
+        }
+      }
+
+      res.writeHead(200, {
+        'Content-Length': fileSize,
+        'Accept-Ranges': 'bytes',
+        'Content-Type': mime,
+      })
+      const stream = createReadStream(targetFile)
+      stream.on('error', () => {
+        if (!res.headersSent) {
+          res.writeHead(500)
+          res.end()
+        }
+      })
+      req.on('close', () => { stream.destroy() })
+      stream.pipe(res)
     },
 
     '/explorer/files': async ({ query, req }) => {

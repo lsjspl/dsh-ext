@@ -281,6 +281,8 @@ export function ModelPicker(props: ModelPickerProps) {
       onBlur={onBlur}
       data-dsh-plugin="dsh-ext"
       data-dsh-part="model-picker"
+      data-provider={current?.provider ?? ''}
+      data-model={current?.model ?? ''}
     >
       <button
         ref={triggerRef}

@@ -418,7 +418,7 @@ export function SettingsPage() {
               label={t('balance.poll')} hint={t('balance.poll.hint')}
               control={<NumberField
                 label={t('balance.poll')}
-                value={c.deepseekBalance.pollSeconds ?? 30}
+                value={c.deepseekBalance.pollSeconds ?? 60}
                 min={0} max={600} step={5}
                 suffix="秒"
                 disabled={disabled || !c.deepseekBalance.enabled}

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { createPortal } from 'react-dom'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -392,27 +393,100 @@ function registerBalanceBadge(ctx: Context): void {
       // the same per-session directory the model selector uses, and skip the
       // badge unless that provider is the official one.
       const models = scope.modelDirectories
+      const sessionsService = scope.sessions as unknown as ISessions | undefined
+
       scope.slots.inject('conversation.input.right', () => scope.slots.register({
         name: 'conversation.input.right',
         id: 'dsh-ext-balance',
         order: 0,
         registrant: 'dsh-ext',
+        inject: (sessionId: string) => ({ sessionId }),
       }, function DevToolBalanceBadge(props: { sessionId?: string }) {
-      const config = useClientConfig()
-      if (config?.deepseekBalance.enabled !== true || !config.deepseekBalance.headerBadge) return null
-      const sessionId = props.sessionId
-      if (sessionId === undefined || sessionId.length === 0) return null
-      const directory = models.directoryFor(sessionId as never)
-      const state = useSyncExternalStore(
-        useCallback((fn: () => void) => directory.store.subscribe(fn), [directory]),
-        useCallback(() => directory.store.getSnapshot(), [directory]),
-      )
-      // null before the first load; treat as official-unknown → hide. A session
-      // on a third-party route is filtered out here; only the official route id
-      // (deepseek / deepseek-official / deepseek-api) passes.
-      const provider = state.current?.provider
-      if (provider === undefined || !/^deepseek(-official|-api)?$/i.test(provider)) return null
-      return <BalanceBadge />
+        const config = useClientConfig()
+        const [cardEl, setCardEl] = useState<HTMLElement | null>(null)
+        const anchorRef = useRef<HTMLSpanElement | null>(null)
+
+        // Reactively observe active sessionId
+        const currentSessionId = useSyncExternalStore(
+          useCallback(fn => sessionsService?.list?.subscribe ? sessionsService.list.subscribe(fn) : () => {}, [sessionsService]),
+          useCallback(() => props.sessionId ?? sessionsService?.list?.getSnapshot?.()?.current, [props.sessionId, sessionsService]),
+        )
+
+        // Reactively observe model directory and selection
+        const directory = useMemo(() => {
+          if (!currentSessionId || !models?.directoryFor) return null
+          try {
+            return models.directoryFor(currentSessionId as never)?.store ?? null
+          } catch {
+            return null
+          }
+        }, [currentSessionId])
+
+        const modelSnap = useSyncExternalStore(
+          useCallback(fn => directory?.subscribe ? directory.subscribe(fn) : () => {}, [directory]),
+          useCallback(() => directory?.getSnapshot ? directory.getSnapshot() : null, [directory]),
+        )
+
+        const findCard = useCallback(() => {
+          const anchor = anchorRef.current
+          const card = anchor?.closest<HTMLElement>('[data-composer-card]') ?? document.querySelector<HTMLElement>('[data-composer-card]')
+          if (card && card.isConnected) {
+            if (getComputedStyle(card).position === 'static') {
+              card.style.position = 'relative'
+            }
+            card.setAttribute('data-has-balance-badge', 'true')
+            return card
+          }
+          return null
+        }, [])
+
+        const setAnchor = useCallback((node: HTMLSpanElement | null) => {
+          anchorRef.current = node
+          const card = findCard()
+          if (card) setCardEl(card)
+        }, [findCard])
+
+        useEffect(() => {
+          const check = () => {
+            const card = findCard()
+            if (card) {
+              setCardEl(current => (current === card && current.isConnected ? current : card))
+            }
+          }
+          check()
+          const timer = window.setInterval(check, 800)
+          return () => {
+            window.clearInterval(timer)
+            document.querySelectorAll('[data-has-balance-badge]').forEach(el => {
+              el.removeAttribute('data-has-balance-badge')
+            })
+          }
+        }, [findCard])
+
+        if (config?.deepseekBalance.enabled !== true || !config.deepseekBalance.headerBadge) return null
+
+        // Determine if the current session model is from the official DeepSeek route.
+        // Only official DeepSeek routes (e.g. 'deepseek-official', 'deepseek') report the official balance.
+        // Third-party (pi-ai) routes have their own providers (e.g. 'leifeng', 'openai', etc.) and should NOT show the badge.
+        const storeProvider = modelSnap?.current?.provider
+        const domProvider = cardEl?.querySelector('[data-dsh-part="model-picker"]')?.getAttribute('data-provider')
+        const activeProvider = (storeProvider && storeProvider.length > 0) ? storeProvider : domProvider
+
+        if (activeProvider !== undefined && activeProvider !== null && activeProvider.length > 0) {
+          const normalized = activeProvider.toLowerCase().trim()
+          const isOfficial = normalized === 'deepseek-official' || normalized === 'deepseek'
+          if (!isOfficial) {
+            cardEl?.removeAttribute('data-has-balance-badge')
+            return null
+          }
+        }
+
+        return (
+          <>
+            <span ref={setAnchor} style={{ display: 'none' }} />
+            {cardEl && cardEl.isConnected ? createPortal(<BalanceBadge cardEl={cardEl} />, cardEl) : null}
+          </>
+        )
       }))
     })
   })
@@ -684,9 +758,6 @@ function registerSidePanel(ctx: Context): void {
       registrant: 'dsh-ext',
     }, function DevToolSidePanel(props: { useWorkspaces?: WorkspacesHook }) {
       const config = useClientConfig()
-      // Root-scope seats get `useWorkspaces`; it is the only reliable answer to
-      // "which project is the user looking at" when no session is open, so the
-      // panel stops falling back to the registry's oldest workspace.
       const workspace = useActiveWorkspace(props.useWorkspaces)
       if (config?.explorer.enabled !== true) return null
       return (
@@ -722,7 +793,15 @@ function registerExplorerToggles(ctx: Context): void {
       const open = usePanelOpen(config?.explorer.defaultOpen ?? false)
       // This seat is session-scoped; the panel's `shell.overlay` seat is not.
       // Publishing here is what lets the panel ask about the right project.
-      useEffect(() => { setPanelSession(props.sessionId) }, [props.sessionId])
+      useEffect(() => {
+        setPanelSession(props.sessionId)
+        return () => {
+          // When creating a new session or unmounting from current session:
+          // Automatically hide the right sidebar as requested by the user.
+          setPanelOpen(false)
+          setPanelSession(undefined)
+        }
+      }, [props.sessionId])
       if (config?.explorer.enabled !== true) return null
       const Icon = config.explorer.side === 'right' ? PanelRightIcon : PanelLeftIcon
       return (

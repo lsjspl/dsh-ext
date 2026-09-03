@@ -462,7 +462,66 @@ export function DiffView(props: { path: string; scope: string }) {
     return <Notice kind="error">{t('explorer.viewFailed', { message: review.error })}</Notice>
   }
   if (data === undefined) {
-    return <div style={{ fontSize: 14, color: token.textMuted }}>{t('common.loading')}</div>
+    return <div style={{ fontSize: 13, color: token.textMuted, padding: '16px 8px', textAlign: 'center' }}>{t('common.loading')}</div>
+  }
+
+  if (data.isImage) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 7,
+            minWidth: 0,
+            background: 'var(--dsw-alias-bg-module-platform, var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08)))',
+            border: `1px solid ${token.border}`,
+            borderRadius: 6,
+            padding: '5px 9px',
+            margin: '0 0 5px',
+          }}
+        >
+          <span
+            title={props.path}
+            style={{ fontSize: 13, fontWeight: 500, color: token.text, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          >{props.path}</span>
+          <span style={{ fontSize: 12, color: token.accent }}>图片已变更</span>
+        </div>
+        {data.newImageUrl && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '16px 8px' }}>
+            <div
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 16,
+                borderRadius: 8,
+                border: `1px solid ${token.border}`,
+                backgroundImage: 'linear-gradient(45deg, rgba(125, 125, 125, 0.12) 25%, transparent 25%), linear-gradient(-45deg, rgba(125, 125, 125, 0.12) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(125, 125, 125, 0.12) 75%), linear-gradient(-45deg, transparent 75%, rgba(125, 125, 125, 0.12) 75%)',
+                backgroundSize: '16px 16px',
+                backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
+                backgroundColor: 'var(--dsw-alias-bg-base, rgba(0, 0, 0, 0.04))',
+              }}
+            >
+              <img
+                src={data.newImageUrl}
+                alt={props.path}
+                style={{ maxWidth: '100%', maxHeight: 480, objectFit: 'contain', borderRadius: 4, boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (data.isBinary) {
+    return (
+      <div style={{ fontSize: 13, color: token.textMuted, padding: '32px 16px', textAlign: 'center' }}>
+        该文件为二进制文件，已检测到版本变更，但无法生成逐行文本差异。
+      </div>
+    )
   }
 
   const changedRows = hunks.reduce(
@@ -470,7 +529,7 @@ export function DiffView(props: { path: string; scope: string }) {
     0,
   )
   if (changedRows === 0) {
-    return <div style={{ fontSize: 14, color: token.textMuted }}>{t('explorer.noDiff')}</div>
+    return <div style={{ fontSize: 13, color: token.textMuted, padding: '16px 8px', textAlign: 'center' }}>{t('explorer.noDiff')}</div>
   }
 
   return (
@@ -478,24 +537,22 @@ export function DiffView(props: { path: string; scope: string }) {
       <div
         style={{
           display: 'flex',
-          alignItems: 'baseline',
-          gap: 8,
+          alignItems: 'center',
+          gap: 7,
           minWidth: 0,
-          // The panel scrolls the whole diff, so the header row (path and line
-          // counts) would ride away with the hunks. Sticky pins it to the top
-          // while the diff scrolls underneath — the same treatment the file
-          // editor view and the review filter row get.
           position: 'sticky',
           top: 0,
           zIndex: 1,
-          background: token.surfaceBase,
-          padding: '6px 0 2px',
-          margin: '-6px 0 0',
+          background: 'var(--dsw-alias-bg-module-platform, var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08)))',
+          border: `1px solid ${token.border}`,
+          borderRadius: 6,
+          padding: '5px 9px',
+          margin: '0 0 5px',
         }}
       >
         <span
           title={props.path}
-          style={{ fontSize: 13, color: token.textMuted, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          style={{ fontSize: 13, fontWeight: 500, color: token.text, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
         >{props.path}</span>
         {data.added !== undefined && <span style={countAddedStyle}>+{data.added}</span>}
         {data.removed !== undefined && <span style={countRemovedStyle}>-{data.removed}</span>}

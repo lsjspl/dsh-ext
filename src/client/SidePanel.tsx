@@ -39,15 +39,8 @@ import {
 export interface SidePanelProps {
   readonly side: 'left' | 'right'
   readonly defaultOpen: boolean
-  /**
-   * The workspace the panel should describe, when the browser knows it.
-   *
-   * This seat is root-scoped, so it is handed no session. Without either hint the
-   * server falls back to the registry's oldest entry and the panel truthfully
-   * describes the wrong project — which is how "不是 git 仓库" appeared for a
-   * directory that plainly is one.
-   */
   readonly workspace?: string
+  readonly sessionId?: string
 }
 
 /** The host's centre column: the element whose content box must shrink. */
@@ -70,10 +63,9 @@ export function SidePanel(props: SidePanelProps) {
   // Read by the padding effect to suppress its transition mid-drag. A ref, not
   // state: it must not itself trigger the render it is describing.
   const dragging = useRef(false)
-  // This seat is root-scoped and gets no `sessionId`; the session-scoped header
-  // toggle publishes it. Without it the host falls back to the registry's oldest
-  // workspace and the panel describes an unrelated project.
-  const session = usePanelSession()
+  // Props takes precedence; fallback to session-header published session
+  const sessionFromStore = usePanelSession()
+  const session = props.sessionId ?? sessionFromStore
 
   // Reserve the panel's width on the conversation column, and give it back on
   // close or unmount. Written as a layout effect's sibling rather than inside
@@ -153,18 +145,15 @@ export function SidePanel(props: SidePanelProps) {
         display: 'flex',
         flexDirection: 'column',
         minHeight: 0,
-        padding: 12,
+        padding: '10px 12px',
         gap: 8,
-        // The host's compact-surface size: its read cards and search blocks set
-        // 13px, and a panel that guesses smaller reads as fine print against
-        // them. Family stays inherited, so the face is always the shell's own.
-        fontSize: 13,
+        fontSize: 13.5,
         color: token.text,
-        background: token.surfaceBase,
+        background: 'var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, #1c1c1f))',
         borderLeft: props.side === 'right' ? `1px solid ${token.border}` : 'none',
         borderRight: props.side === 'left' ? `1px solid ${token.border}` : 'none',
+        boxShadow: props.side === 'right' ? '-4px 0 16px rgba(0, 0, 0, 0.1)' : '4px 0 16px rgba(0, 0, 0, 0.1)',
         overflow: 'hidden',
-        // The overlay layer is click-through; this subtree opts back in.
         pointerEvents: 'auto',
       }}
       aria-label={t('explorer.title')}
@@ -178,26 +167,26 @@ export function SidePanel(props: SidePanelProps) {
         aria-valuemax={MAX_PANEL_WIDTH}
         onPointerDown={onHandleDown}
         onKeyDown={(event) => {
-          // Keyboard resizing, because a pointer-only affordance is unreachable
-          // for anyone who cannot use one. 16px matches the shell's own step.
           const step = event.shiftKey ? 64 : 16
           if (event.key === 'ArrowLeft') setPanelWidth(width + (props.side === 'right' ? step : -step))
           else if (event.key === 'ArrowRight') setPanelWidth(width + (props.side === 'right' ? -step : step))
           else return
           event.preventDefault()
         }}
+        onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = 'var(--dsw-alias-state-business-primary, #2563eb)' }}
+        onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent' }}
         tabIndex={0}
         style={{
           position: 'absolute',
           top: 0,
           bottom: 0,
-          ...(props.side === 'right' ? { left: -3 } : { right: -3 }),
-          width: 7,
+          ...(props.side === 'right' ? { left: -2 } : { right: -2 }),
+          width: 5,
           cursor: 'col-resize',
-          // Above the panel's own content so the grab area is never stolen by a
-          // row that happens to sit against the edge.
-          zIndex: 1,
+          zIndex: 10,
           touchAction: 'none',
+          backgroundColor: 'transparent',
+          transition: 'background-color 150ms ease',
         }}
       />
       <ExplorerPanel sessionId={session} workspace={props.workspace} />
