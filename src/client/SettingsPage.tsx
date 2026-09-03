@@ -450,10 +450,11 @@ export function SettingsPage() {
             action={<Toggle label={t('section.plugins')} checked={c.pluginSafety.enabled} disabled={disabled}
               onChange={next => { set(['pluginSafety', 'enabled'], next) }} />}
           >
-            <Disclosure label={t('plugins.list')} defaultOpen={c.pluginSafety.quarantine.length > 0}>
+            <div style={{ paddingTop: 8 }}>
               <PluginsPanel enabled={c.pluginSafety.enabled} />
-            </Disclosure>
+            </div>
           </Section>
+
         )}
         </SettingsBoundary>
       </div>
