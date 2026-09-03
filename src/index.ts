@@ -12,6 +12,8 @@ import { mountSessionAdmin } from './features/session-admin.ts'
 import { mountPluginSafety } from './features/plugin-safety.ts'
 import { mountCheckpoints } from './features/checkpoints.ts'
 import { mountReasoningEffort } from './features/reasoning-effort.ts'
+import { RESCUE_SENTINEL_SCRIPT } from './sentinel.ts'
+
 
 export { Config } from './config.ts'
 export const name = 'dsh-ext'
@@ -113,10 +115,21 @@ export function apply(ctx: Context, entry: Config): void {
     }
   }
 
-  // The settings endpoints are not a feature: they are how every switch below
-  // is reached, so they mount unconditionally and are never torn down.
   installRoutes(routes, settingsRoutes(ctx, settings.current))
   serveApi(ctx, routes)
+
+  // In-browser rescue sentinel: injected via webserver/index-inject into index.html
+  // so whenever DSH boots up with a failed plugin card, the rescue UI is ready.
+  ctx.on('webserver/index-inject', (table: unknown) => {
+    if (settings.current().pluginSafety.enabled && Array.isArray(table)) {
+      table.push({
+        kind: 'script',
+        placement: 'body',
+        text: RESCUE_SENTINEL_SCRIPT,
+      })
+    }
+  })
+
 
   ctx.effect(() => () => {
     for (const dispose of mounted.values()) {

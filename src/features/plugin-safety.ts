@@ -168,27 +168,35 @@ export function mountPluginSafety(
         throw new ApiError(400, 'that is part of the harness itself and cannot be quarantined here')
       }
 
-      // Resolve the package to the rows a disable patch has to name. A package
-      // whose rows cannot be resolved is refused rather than quarantined under
-      // its own name, which would write a patch that matches nothing.
+      // Resolve the package to the rows a disable patch has to name.
+      // Match either by package name or by the loader row ID.
       const view = await buildView(quarantineFile)
-      const target = view.plugins.find(row => row.name === name)
-      if (target === undefined) throw new ApiError(404, 'no such installed plugin')
-      if (target.rows.length === 0) {
-        throw new ApiError(409, `${name} declares no loader row (no dsh.bundle.patch), so there is nothing to disable`)
-      }
+      const target = view.plugins.find(row => row.name === name || row.rows.includes(name))
+      const targetRows = target && target.rows.length > 0 ? target.rows : [name]
 
       const wanted = request?.quarantined !== false
       const record = await updateQuarantine(quarantineFile, patchFile, rows => (
         wanted
-          ? [...rows, ...target.rows]
-          : rows.filter(existing => !target.rows.includes(existing))
+          ? [...rows, ...targetRows]
+          : rows.filter(existing => !targetRows.includes(existing))
       ))
       log.info(
         '%s %s (rows: %s); effective on the next start',
-        wanted ? 'quarantined' : 'released', name, target.rows.join(', '),
+        wanted ? 'quarantined' : 'released', name, targetRows.join(', '),
       )
-      return { quarantine: record.rows, rows: target.rows, restartRequired: true }
+      return { quarantine: record.rows, rows: targetRows, restartRequired: true }
+    },
+
+    '/plugins/safe-mode': async ({ method }) => {
+      if (method !== 'POST') throw new ApiError(405, 'use POST to enable safe mode')
+      requireEnabled()
+      const view = await buildView(quarantineFile)
+      const thirdPartyRows = view.plugins.filter(p => !p.builtin).flatMap(p => p.rows)
+      const record = await updateQuarantine(quarantineFile, patchFile, rows => [
+        ...new Set([...rows, ...thirdPartyRows]),
+      ])
+      log.info('safe mode activated; quarantined all third-party plugins (%d rows)', thirdPartyRows.length)
+      return { quarantine: record.rows, rows: thirdPartyRows, restartRequired: true }
     },
 
     '/plugins/quarantine/clear': async ({ method }) => {
@@ -199,3 +207,4 @@ export function mountPluginSafety(
     },
   })
 }
+
