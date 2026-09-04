@@ -35,29 +35,8 @@ import type {
 const heroChipStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: 5,
-  height: 28,
-  padding: '0 10px',
-  borderRadius: 14,
-  background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))',
-  border: '1px solid var(--dsw-alias-border-l1, rgba(255, 255, 255, 0.15))',
-  color: 'var(--dsw-alias-label-primary, inherit)',
-  fontSize: 12.5,
-  fontWeight: 500,
-  cursor: 'pointer',
-  transition: 'all 120ms ease',
-  backdropFilter: 'blur(8px)',
-  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.06)',
-  whiteSpace: 'nowrap',
-  userSelect: 'none',
-  marginLeft: 4,
-}
-
-const badgeChipStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
   gap: 6,
-  fontSize: 12,
+  fontSize: 13,
   fontWeight: 500,
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
   lineHeight: '20px',
@@ -65,8 +44,28 @@ const badgeChipStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
   userSelect: 'none',
   cursor: 'pointer',
-  // Old-session composer controls are intentionally plain text: no pill, no
-  // border, no background. The hero/new-session variant keeps the capsule look.
+  padding: '2px 2px',
+  borderRadius: 0,
+  background: 'transparent',
+  border: 'none',
+  boxShadow: 'none',
+  transition: 'color 120ms ease',
+}
+
+const badgeChipStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  fontSize: 13,
+  fontWeight: 500,
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+  lineHeight: '20px',
+  color: token.text,
+  whiteSpace: 'nowrap',
+  userSelect: 'none',
+  cursor: 'pointer',
+  // Both old-session and new-session controls are intentionally plain text: no
+  // pill, no border, no background.
   padding: '2px 2px',
   borderRadius: 0,
   background: 'transparent',
@@ -800,13 +799,13 @@ export function ComposerGitControlsInner(props: {
               title={`${isMainWorktree ? t('git.mainWorkspacePrefix') : t('git.worktreeOfPrefix', { name: mainRepoName })} ${worktreeDisplayName} (当前会话已锁定，不可切换)`}
               style={{
                 ...(props.variant === 'hero' ? heroChipStyle : badgeChipStyle),
-                cursor: 'not-allowed',
+                cursor: 'default',
                 opacity: 0.88,
                 userSelect: 'none',
               }}
             >
               <FolderIcon size={13} style={{ color: 'inherit' }} />
-              <span style={{ fontSize: 11, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
+              <span style={{ fontSize: 13, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
                 {isMainWorktree ? t('git.mainWorkspacePrefix') : t('git.worktreeOfPrefix', { name: mainRepoName })}
               </span>
               <span style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -826,24 +825,16 @@ export function ComposerGitControlsInner(props: {
                 cursor: 'pointer',
               }}
               onMouseEnter={e => {
-                if (props.variant === 'hero') {
-                  e.currentTarget.style.backgroundColor = 'var(--dsw-alias-interactive-bg-hover, rgba(125, 125, 125, 0.22))'
-                } else {
-                  e.currentTarget.style.backgroundColor = 'transparent'
-                  e.currentTarget.style.color = 'var(--dsw-alias-state-business-primary, #3b82f6)'
-                }
+                e.currentTarget.style.backgroundColor = 'transparent'
+                e.currentTarget.style.color = 'var(--dsw-alias-state-business-primary, #3b82f6)'
               }}
               onMouseLeave={e => {
-                if (props.variant === 'hero') {
-                  e.currentTarget.style.backgroundColor = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))'
-                } else {
-                  e.currentTarget.style.backgroundColor = 'transparent'
-                  e.currentTarget.style.color = token.text
-                }
+                e.currentTarget.style.backgroundColor = 'transparent'
+                e.currentTarget.style.color = token.text
               }}
             >
               <FolderIcon size={13} style={{ color: 'inherit' }} />
-              <span style={{ fontSize: 11, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
+              <span style={{ fontSize: 13, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
                 {isMainWorktree ? t('git.mainWorkspacePrefix') : t('git.worktreeOfPrefix', { name: mainRepoName })}
               </span>
               <span style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -989,20 +980,20 @@ export function ComposerGitControlsInner(props: {
               title={`${t('git.branchPrefix')} ${currentBranch} (当前会话已锁定，不可切换)`}
               style={{
                 ...(props.variant === 'hero' ? heroChipStyle : badgeChipStyle),
-                cursor: 'not-allowed',
+                cursor: 'default',
                 opacity: 0.88,
                 userSelect: 'none',
               }}
             >
               <GitIcon size={13} style={{ color: 'inherit' }} />
-              <span style={{ fontSize: 11, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
+              <span style={{ fontSize: 13, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
                 {t('git.branchPrefix')}
               </span>
               <span style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {currentBranch}
               </span>
-              {ahead > 0 && <span style={{ color: token.success, fontSize: 10.5, fontWeight: 600 }}>↑{ahead}</span>}
-              {behind > 0 && <span style={{ color: token.warn, fontSize: 10.5, fontWeight: 600 }}>↓{behind}</span>}
+              {ahead > 0 && <span style={{ color: token.success, fontSize: 13, fontWeight: 600 }}>↑{ahead}</span>}
+              {behind > 0 && <span style={{ color: token.warn, fontSize: 13, fontWeight: 600 }}>↓{behind}</span>}
             </div>
           ) : (
             <button
@@ -1021,31 +1012,23 @@ export function ComposerGitControlsInner(props: {
                 cursor: 'pointer',
               }}
               onMouseEnter={e => {
-                if (props.variant === 'hero') {
-                  e.currentTarget.style.backgroundColor = 'var(--dsw-alias-interactive-bg-hover, rgba(125, 125, 125, 0.22))'
-                } else {
-                  e.currentTarget.style.backgroundColor = 'transparent'
-                  e.currentTarget.style.color = 'var(--dsw-alias-state-business-primary, #3b82f6)'
-                }
+                e.currentTarget.style.backgroundColor = 'transparent'
+                e.currentTarget.style.color = 'var(--dsw-alias-state-business-primary, #3b82f6)'
               }}
               onMouseLeave={e => {
-                if (props.variant === 'hero') {
-                  e.currentTarget.style.backgroundColor = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))'
-                } else {
-                  e.currentTarget.style.backgroundColor = 'transparent'
-                  e.currentTarget.style.color = token.text
-                }
+                e.currentTarget.style.backgroundColor = 'transparent'
+                e.currentTarget.style.color = token.text
               }}
             >
               <GitIcon size={13} style={{ color: 'inherit' }} />
-              <span style={{ fontSize: 11, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
+              <span style={{ fontSize: 13, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
                 {t('git.branchPrefix')}
               </span>
               <span style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {currentBranch}
               </span>
-              {ahead > 0 && <span style={{ color: token.success, fontSize: 10.5, fontWeight: 600 }}>↑{ahead}</span>}
-              {behind > 0 && <span style={{ color: token.warn, fontSize: 10.5, fontWeight: 600 }}>↓{behind}</span>}
+              {ahead > 0 && <span style={{ color: token.success, fontSize: 13, fontWeight: 600 }}>↑{ahead}</span>}
+              {behind > 0 && <span style={{ color: token.warn, fontSize: 13, fontWeight: 600 }}>↓{behind}</span>}
               <ChevronIcon size={9} open={branchOpen} />
             </button>
           )}

@@ -110,6 +110,7 @@ export function apply(ctx: Context): void {
   // Copy first: every surface below reads it, and a late dictionary would show
   // raw keys on first paint.
   installLocale(ctx)
+  injectAttachIconStyles()
 
   trySlot('settings page', () => {
     ctx.slots.inject('settings.section', () => ctx.slots.register({
@@ -211,6 +212,54 @@ type CommandUiPatch = {
 const PLUS_ATTACH_VALUE = 'dsh-ext:plus-attach'
 
 /**
+ * The candidate `icon` field is text-only, so the host cannot render a React
+ * SVG there. We reserve the icon span with an empty string and style it with
+ * the same paperclip as an SVG mask, which is closer to the host's icon set
+ * than an emoji glyph.
+ */
+const ATTACH_ICON = ''
+
+const ATTACH_ICON_CSS_URL = `url("data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="M12.4 7.3L7.7 12a2.9 2.9 0 0 1-4.1-4.1l5-5a1.95 1.95 0 0 1 2.75 2.75l-5 5a0.97 0.97 0 0 1-1.38-1.38l4.4-4.4" stroke="black" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+)}")`
+
+let attachIconStylesInjected = false
+function injectAttachIconStyles(): void {
+  if (attachIconStylesInjected || typeof document === 'undefined') return
+  attachIconStylesInjected = true
+  const style = document.createElement('style')
+  style.dataset.dshPlugin = 'dsh-ext'
+  style.textContent = `
+[role="listbox"] [role="option"] > span[aria-hidden="true"] {
+  font-size: 0 !important;
+  line-height: 0 !important;
+  background-color: currentColor !important;
+  -webkit-mask: ${ATTACH_ICON_CSS_URL} center / contain no-repeat;
+  mask: ${ATTACH_ICON_CSS_URL} center / contain no-repeat;
+}
+`
+  document.head.appendChild(style)
+}
+
+/** Localized heading above the attach row, mirroring the slash menu's Tools group. */
+function attachSectionLabel(): string {
+  return document.documentElement.lang.startsWith('zh') ? '工具' : 'Tools'
+}
+
+/** Localized heading used to split "Attach a file" above the command rows. */
+function commandSectionLabel(): string {
+  return document.documentElement.lang.startsWith('zh') ? '命令' : 'Commands'
+}
+
+/**
+ * Sessions that just opened the `+` launcher. The synthetic attach row is only
+ * for that programmatic command menu; the typed `/` menu already has its own
+ * Tools group above Commands, so it must not leak into the command source there.
+ */
+const plusCommandSessions = new Set<string>()
+const patchedTriggerControllers = new WeakSet<object>()
+
+/**
  * Put a real "Attach a file" row into the `+` launcher's first-level menu.
  *
  * The `+` button is hard-wired by ui-conversation to open only the `/` command
@@ -230,13 +279,65 @@ const PLUS_ATTACH_VALUE = 'dsh-ext:plus-attach'
  */
 function registerPlusAttachEntry(ctx: Context): void {
   trySlot('plus menu attach entry', () => {
-    ctx.inject(['commandUi'], (scoped: Context) => {
+    ctx.inject(['commandUi', 'inputTriggers'], (scoped: Context) => {
       const commandUi = scoped.commandUi as CommandUiRuntime as unknown as CommandUiPatch
+      const inputTriggers = scoped.inputTriggers as InputTriggerServiceContract
       const originalCandidates = commandUi.candidates.bind(commandUi)
       const originalDispatch = commandUi.dispatch.bind(commandUi)
 
+      // The `+` button and the typed `/` menu share the same command source.
+      // Only the programmatic launcher goes through `toggleSource('command')`,
+      // so tag those sessions there and use the tag to keep the synthetic
+      // attach row out of the typed slash menu (which has its own Tools group).
+      const originalSessionOf = inputTriggers.sessionOf.bind(inputTriggers)
+      inputTriggers.sessionOf = ((actx: Parameters<typeof inputTriggers.sessionOf>[0]) => {
+        const controller = originalSessionOf(actx) as unknown as {
+          toggleSource(source: string, hit: unknown): void
+          project(): { sessionId: string }
+          reduce(event: { type?: string }): void
+          menu: {
+            getSnapshot(): {
+              open: boolean
+              groups: readonly { source: string; items: readonly { value?: string }[] }[]
+              highlight: { source: string; index: number } | null
+            }
+            set(state: unknown): void
+          }
+        }
+        if (controller !== undefined && !patchedTriggerControllers.has(controller)) {
+          patchedTriggerControllers.add(controller)
+          const originalToggle = controller.toggleSource.bind(controller)
+          controller.toggleSource = (source, hit) => {
+            if (source === 'command') plusCommandSessions.add(controller.project().sessionId)
+            return originalToggle(source, hit)
+          }
+          // The host highlights the first menu row automatically. In the `+`
+          // launcher that would land on "Attach a file"; clear the initial
+          // highlight so the menu opens with nothing selected. Arrow keys still
+          // move onto the first row normally.
+          const originalReduce = controller.reduce.bind(controller)
+          controller.reduce = (event) => {
+            originalReduce(event)
+            if (event?.type !== 'source-settled') return
+            const state = controller.menu.getSnapshot()
+            if (!state.open) return
+            const group = state.groups.find(g => g.source === 'command')
+            if (group === undefined) return
+            const hasAttach = group.items.some(item => item.value === PLUS_ATTACH_VALUE)
+            if (hasAttach) {
+              controller.menu.set({ ...state, highlight: null })
+            }
+          }
+        }
+        return controller
+      }) as unknown as typeof inputTriggers.sessionOf
+
       commandUi.candidates = async (session, req) => {
+        const isPlusMenu = plusCommandSessions.has(session.sessionId)
+        if (isPlusMenu) plusCommandSessions.delete(session.sessionId)
         const items = await originalCandidates(session, req)
+        // The typed `/` menu must not receive the plus-menu synthetic row.
+        if (!isPlusMenu) return items
         const config = readClientConfig()
         if (config?.imageComposer.enabled !== true || !config.imageComposer.pickerButton) return items
         if (!hasImagePicker()) return items
@@ -250,7 +351,18 @@ function registerPlusAttachEntry(ctx: Context): void {
           || 'file'.startsWith(query)
         if (!matches) return items
 
-        return [{ name: label, description: hint, value: PLUS_ATTACH_VALUE }, ...items]
+        // The `+` launcher opens only the command source, so the shipped menu
+        // would normally show the 命令/Commands group title above this row.
+        // Give the attach row its own 工具/Tools section heading and mark the
+        // real commands with the 命令/Commands heading instead: that suppresses
+        // the source-level title and puts each heading beside its own group,
+        // so the file picker sits in its own titled section above commands.
+        const attachLabel = attachSectionLabel()
+        const commandLabel = commandSectionLabel()
+        return [
+          { name: label, description: hint, icon: ATTACH_ICON, section: attachLabel, value: PLUS_ATTACH_VALUE },
+          ...items.map(item => ({ ...item, section: commandLabel })),
+        ]
       }
 
       commandUi.dispatch = (pick) => {
@@ -306,7 +418,7 @@ function registerToolsGroup(ctx: Context): void {
           // query through rather than matching on the source's behalf.
           const query = req.query.trim().toLowerCase()
           if (query.length > 0 && !label.toLowerCase().includes(query) && !'file'.startsWith(query)) return []
-          return [{ name: label, description: translate('files.attachHint') }]
+          return [{ name: label, description: translate('files.attachHint'), icon: ATTACH_ICON }]
         },
         onPick: () => {
           openImagePicker()

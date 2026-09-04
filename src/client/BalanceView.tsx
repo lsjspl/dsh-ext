@@ -492,8 +492,9 @@ export function BalanceBadge(props: { cardEl?: HTMLElement | null; inline?: bool
 
   if (primary === undefined) return null
 
-  // New-session hero keeps the capsule; old-session composer uses bare text.
-  const isCapsule = props.variant === 'hero'
+  // Keep the old-session bare-text look everywhere; the new-session hero no
+  // longer uses the capsule/bordered pill.
+  const isCapsule = false
 
   const handleBadgeClick = (e: React.MouseEvent) => {
     // 双击：触发大额【暴击 (CRIT)】5段扣血重创！
@@ -556,7 +557,7 @@ export function BalanceBadge(props: { cardEl?: HTMLElement | null; inline?: bool
         gap: 6,
         height: isCapsule ? 28 : undefined,
         boxSizing: 'border-box',
-        fontSize: 12,
+        fontSize: 13,
         fontWeight: 500,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
         padding: isCapsule ? '0 10px' : '2px 2px',
