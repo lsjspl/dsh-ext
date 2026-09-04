@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-session-persistence'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
 import { CheckpointStore } from '../checkpoint-store.ts'
@@ -407,6 +408,32 @@ export function mountCheckpoints(
     return merged
   }
 
+  /**
+   * The turn-end refs of one session, merged on the same fork-lineage rules as
+   * {@link mergedTurnRefs}. These are the "after" boundaries that keep a
+   * completed turn's file list frozen at turn end.
+   */
+  async function mergedTurnEndRefs(
+    workTree: string,
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<Map<number, string>> {
+    const merged = new Map<number, string>()
+    let current: string | undefined = sessionId
+    let inheritedLimit = Number.POSITIVE_INFINITY
+    for (let depth = 0; current !== undefined && depth < 8; depth += 1) {
+      const refs = await store.turnEndRefs(workTree, current, signal)
+      for (const [turn, id] of refs) {
+        if (turn > inheritedLimit) continue
+        if (!merged.has(turn)) merged.set(turn, id)
+      }
+      const lineage = await sessionLineage(current, signal)
+      inheritedLimit = lineage.seedLength ?? Number.POSITIVE_INFINITY
+      current = lineage.parentSession
+    }
+    return merged
+  }
+
   /** The checkpoint created before this turn's first mutation. */
   async function checkpointForTurn(
     workTree: string,
@@ -473,6 +500,38 @@ export function mountCheckpoints(
       log.warn('checkpoints: snapshot before %s failed: %o', exec.name, error)
     }
     return await next()
+  })
+
+  // A turn-end checkpoint freezes the turn's "after" state. Without it, the
+  // newest turn's card kept diffing to the live working tree, so later changes
+  // made by other sessions in the same workspace were reported as part of this
+  // turn. This listener records that boundary as soon as the turn closes.
+  const disposeTurnEnd = ctx.on('session/event', async (session: Session, event: SessionEvent) => {
+    if (event.type !== 'turn/end') return
+    const current = config().checkpoints
+    if (!current.enabled) return
+    const sessionId = session.id
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return
+    const turn = event.data.turn
+    if (typeof turn !== 'number') return
+
+    try {
+      const workTree = liveSessionCwd(session)
+        ?? await requireWorkspace(ctx, null, sessionId)
+
+      // Only turns that actually took a pre-mutation checkpoint should also get
+      // an end checkpoint. This keeps the ref namespace free of no-op turns.
+      const pre = await store.resolveTurn(workTree, sessionId, turn)
+      if (pre === undefined) return
+
+      await serialize(workTree, async () => {
+        const snapshot = await store.snapshot(workTree, sessionId, `turn:${turn} end`)
+        await store.linkTurnEnd(workTree, sessionId, turn, snapshot.id)
+        invalidateTurnChangesCache(workTree)
+      })
+    } catch (error: unknown) {
+      log.warn('checkpoints: turn-end snapshot for turn %s failed: %o', turn, error)
+    }
   })
 
   const contributed = installRoutes(routes, {
@@ -592,8 +651,9 @@ export function mountCheckpoints(
       // CACHING FIX: Check cache before expensive turnChanges computation.
       // The cache key includes workTree, sessionId, and turn. We also track
       // the refs hash to detect when a new checkpoint invalidates the cache.
+      const endRefs = await mergedTurnEndRefs(workTree, sessionId, controller.signal)
       const cacheKey = turnChangesCacheKey(workTree, sessionId, resolvedTurn)
-      const currentRefsHash = refsMapHash(refs)
+      const currentRefsHash = `${refsMapHash(refs)}|${refsMapHash(endRefs)}`
       const cached = turnChangesCache.get(cacheKey)
       const now = Date.now()
 
@@ -605,7 +665,7 @@ export function mountCheckpoints(
         changes = cached.result
       } else {
         // Cache miss or stale: compute and cache
-        changes = await store.turnChanges(workTree, refs, resolvedTurn, controller.signal)
+        changes = await store.turnChanges(workTree, refs, endRefs, resolvedTurn, controller.signal)
         turnChangesCache.set(cacheKey, {
           result: changes,
           timestamp: now,
@@ -737,6 +797,7 @@ export function mountCheckpoints(
 
   return () => {
     disposeHook()
+    disposeTurnEnd()
     contributed()
     turnSnapshots.clear()
     queues.clear()

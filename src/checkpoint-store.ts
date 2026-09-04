@@ -370,6 +370,56 @@ export class CheckpointStore {
   }
 
   /**
+   * Bind one session turn to the checkpoint taken when that turn ended.
+   *
+   * This is the "after" boundary for a completed turn. Without it, the newest
+   * turn's file list was computed against the current working tree, so changes
+   * made later by other sessions sharing the same workspace leaked into the
+   * turn's card.
+   */
+  async linkTurnEnd(workTree: string, sessionId: string, turn: number, checkpointId: string): Promise<void> {
+    const repo = this.repoFor(workTree)
+    const ref = `refs/dsh-turn-ends/${workspaceKey(sessionId)}/${turn}`
+    const missing = '0000000000000000000000000000000000000000'
+    await git(['update-ref', ref, checkpointId, missing], { cwd: workTree, env: this.env(repo) })
+  }
+
+  /** The exact turn-end checkpoint linked to this session turn, if one exists. */
+  async resolveTurnEnd(workTree: string, sessionId: string, turn: number, signal?: AbortSignal): Promise<string | undefined> {
+    const repo = this.repoFor(workTree)
+    const ref = `refs/dsh-turn-ends/${workspaceKey(sessionId)}/${turn}`
+    const result = await git(['rev-parse', '--verify', ref], { cwd: workTree, env: this.env(repo), signal })
+    return result.ok ? result.stdout.trim() : undefined
+  }
+
+  /**
+   * Every turn-end ref of one session in ONE git call, keyed by turn number.
+   *
+   * Mirrors {@link turnRefs}; used as the "after" boundary when computing a
+   * completed turn's file changes.
+   */
+  async turnEndRefs(workTree: string, sessionId: string, signal?: AbortSignal): Promise<Map<number, string>> {
+    const repo = this.repoFor(workTree)
+    const prefix = `refs/dsh-turn-ends/${workspaceKey(sessionId)}/`
+    const result = await git(
+      ['for-each-ref', '--format=%(refname) %(objectname)', prefix],
+      { cwd: workTree, env: this.env(repo), signal },
+    )
+    const refs = new Map<number, string>()
+    if (!result.ok) return refs
+    for (const line of result.stdout.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed.length === 0) continue
+      const space = trimmed.lastIndexOf(' ')
+      if (space <= 0) continue
+      const turn = Number.parseInt(trimmed.slice(prefix.length, space), 10)
+      const id = trimmed.slice(space + 1)
+      if (Number.isSafeInteger(turn) && /^[0-9a-f]{40}$/.test(id)) refs.set(turn, id)
+    }
+    return refs
+  }
+
+  /**
    * Every turn ref of one session in ONE git call: turn number → checkpoint id.
    *
    * The per-turn diff needs two lookups (this turn's checkpoint and the next
@@ -454,8 +504,10 @@ export class CheckpointStore {
    * The files one turn changed, with line counts.
    *
    * A turn's changes are the delta between the checkpoint taken before its
-   * first mutation and the next boundary — the next turn-with-a-checkpoint's
-   * pre-mutation state, or, for the newest turn, the working tree as it is now.
+   * first mutation and the turn-end boundary — the checkpoint recorded when the
+   * turn closed. For turns without a turn-end checkpoint (older checkpoints, or
+   * a still-running turn), the fallback boundary is the next turn-with-a-checkpoint's
+   * pre-mutation state, or the working tree as it is now.
    *
    * The working-tree side needs untracked files included, and `git diff
    * <commit>` cannot see a file no index has ever staged. Rather than staging
@@ -468,6 +520,7 @@ export class CheckpointStore {
   async turnChanges(
     workTree: string,
     refs: ReadonlyMap<number, string>,
+    endRefs: ReadonlyMap<number, string>,
     turn: number,
     signal?: AbortSignal,
   ): Promise<{ files: { path: string; added: number; removed: number }[]; added: number; removed: number } | undefined> {
@@ -476,16 +529,24 @@ export class CheckpointStore {
     const repo = this.repoFor(workTree)
     const env = this.env(repo)
 
-    // The next recorded turn is this turn's "after" state: turns with no
-    // mutations have no checkpoint, and skipping them is right because their
-    // delta is empty. The refs map answers in one call what used to be a
-    // per-turn probe walk.
-    let boundary: string | undefined
-    for (const later of [...refs.keys()].sort((a, b) => a - b)) {
-      if (later > turn) { boundary = refs.get(later); break }
+    // Preferred "after" boundary: the checkpoint taken when this turn ended.
+    // This freezes the turn's file list at completion time, so later changes
+    // made by other sessions in the same workspace do not leak into this turn's
+    // card. Older turns created before turn-end checkpoints existed fall back
+    // to the next turn's pre-mutation checkpoint below.
+    let to = endRefs.get(turn)
+    if (to === undefined) {
+      // The next recorded turn is this turn's "after" state: turns with no
+      // mutations have no checkpoint, and skipping them is right because their
+      // delta is empty. The refs map answers in one call what used to be a
+      // per-turn probe walk.
+      let boundary: string | undefined
+      for (const later of [...refs.keys()].sort((a, b) => a - b)) {
+        if (later > turn) { boundary = refs.get(later); break }
+      }
+      to = boundary
     }
 
-    let to = boundary
     if (to === undefined) {
       const tempIndex = join(repo.gitDir, `dsh-turn-index-${process.pid}`)
       try {

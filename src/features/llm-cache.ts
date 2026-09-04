@@ -24,6 +24,27 @@ export function hashText(text: string): string {
 }
 
 /**
+ * Drop trailing assistant tool-call messages that have no matching tool-result
+ * messages yet. When a tool is still being reviewed/executed, the derived
+ * history may already contain the assistant message that requested it; appending
+ * a new user message after an unresolved tool-call block is not a valid provider
+ * message ordering, and it also removes the part of the history that was not in
+ * the last routed request that warmed the cache.
+ */
+export function trimUnresolvedToolCalls(history: readonly unknown[]): readonly unknown[] {
+  const out = [...history]
+  while (out.length > 0) {
+    const last = out[out.length - 1] as { role?: unknown; content?: readonly { type?: unknown }[] } | undefined
+    if (last?.role === 'assistant' && Array.isArray(last.content) && last.content.some(block => block?.type === 'tool-call')) {
+      out.pop()
+      continue
+    }
+    break
+  }
+  return out
+}
+
+/**
  * Return a cached successful value when the key is still fresh, otherwise run
  * `compute`, store its successful resolution, and return it.
  */

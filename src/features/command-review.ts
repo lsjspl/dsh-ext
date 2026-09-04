@@ -7,7 +7,7 @@ import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
 import { DEFAULT_DELETE_PATTERNS, DEFAULT_READ_PATTERNS, type Config, type CommandReviewConfig } from '../config.ts'
 import type { AuditEntry, ReviewVerdict } from '../shared/api-contract.ts'
-import { cached, hashText } from './llm-cache.ts'
+import { cached, hashText, trimUnresolvedToolCalls } from './llm-cache.ts'
 
 /**
  * Feature 4 — a second model reviews high-risk tool calls before they run.
@@ -165,6 +165,17 @@ export function parseVerdict(text: string): ModelVerdict | undefined {
   }
 }
 
+/** Minimal live-session face needed to replay the warm request prefix for KV-cache reuse. */
+interface ReviewSession {
+  readonly id?: string
+  requestHeader?(): {
+    system?: string
+    tools?: readonly unknown[]
+    config?: { provider?: string; model?: string }
+  } | undefined
+  deriveMessages?(): readonly unknown[]
+}
+
 /**
  * Ask the reviewer model. Returns `undefined` for every failure mode — no
  * LLM service, no credential, a timeout, an unparseable answer — because the
@@ -176,6 +187,7 @@ async function askReviewer(
   tool: string,
   command: string,
   callerSignal: AbortSignal,
+  session?: ReviewSession,
 ): Promise<ModelVerdict | undefined> {
   const llm = ctx.get('llm')
   if (llm === undefined) return undefined
@@ -190,12 +202,43 @@ async function askReviewer(
       ? `${command.slice(0, MAX_REVIEW_CHARS)}\n…(truncated)`
       : command
 
+    const reviewText = `Tool: ${tool}\n\nProposed command:\n\`\`\`\n${excerpt}\n\`\`\``
+
+    // Prefer replaying the live session's warm request prefix (system + tools +
+    // derived history) and appending the review instruction as a trailing user
+    // message. That makes this auxiliary call a prefix-extension of the last
+    // routed request, so the provider's KV/prefix cache is reused instead of
+    // starting a brand-new prefix. Falls back to the short standalone prompt
+    // when there is no live session/header.
+    const header = session?.requestHeader?.()
+    const rawHistory = session?.deriveMessages?.()
+    const history = rawHistory === undefined ? undefined : trimUnresolvedToolCalls(rawHistory)
+    const headerConfig = header?.config
+    const reusePrefix = header !== undefined
+      && headerConfig !== undefined
+      && headerConfig.provider != null
+      && headerConfig.model != null
+      && history !== undefined
+      && history.length > 0
+    const provider = reusePrefix ? headerConfig.provider : settings.provider
+    const model = reusePrefix ? headerConfig.model : settings.model
+    const system = reusePrefix ? header.system : SYSTEM_PROMPT
+    const messages = reusePrefix
+      ? [
+          ...history,
+          { role: 'user', content: [{ type: 'text', text: reviewText }] },
+        ] as never
+      : [{
+          role: 'user',
+          content: [{ type: 'text', text: reviewText }],
+        }] as never
+
     // Cache identical review requests for a short window: exact same provider,
     // model, tool, and command text get the previous verdict instead of another
     // paid model call. Dynamic/error outcomes are never cached.
     const cacheKey = hashText([
-      settings.provider,
-      settings.model,
+      provider ?? '',
+      model ?? '',
       tool,
       excerpt,
     ].join('\u0000'))
@@ -203,20 +246,14 @@ async function askReviewer(
     return await cached<ModelVerdict>(cacheKey, REVIEW_CACHE_TTL_MS, async () => {
       let answer = ''
       const stream = llm.stream({
-        provider: settings.provider,
-        model: settings.model,
-        system: SYSTEM_PROMPT,
-        messages: [{
-          role: 'user',
-          content: [{
-            type: 'text',
-            // Fenced and labelled so the reviewer can tell the command apart
-            // from its own instructions even when the command contains prose.
-            text: `Tool: ${tool}\n\nProposed command:\n\`\`\`\n${excerpt}\n\`\`\``,
-          }],
-        }] as never,
+        provider: provider!,
+        model: model!,
+        system,
+        ...(reusePrefix && header?.tools !== undefined ? { tools: header.tools as never } : {}),
+        messages,
         maxTokens: 300,
         temperature: 0,
+        ...(reusePrefix && session?.id !== undefined ? { sessionId: session.id as never } : {}),
         signal: deadline.signal,
       })
 
@@ -398,7 +435,7 @@ export function mountCommandReview(
       return finish('ask', `matches a high-risk pattern: ${matched?.source ?? 'unknown'}`, 'rules')
     }
 
-    const verdict = await askReviewer(ctx, settings, exec.name, command, exec.signal)
+    const verdict = await askReviewer(ctx, settings, exec.name, command, exec.signal, exec.agent?.session as ReviewSession | undefined)
 
     if (verdict === undefined) {
       const reason = 'the command reviewer was unavailable, timed out, or gave an unreadable answer'

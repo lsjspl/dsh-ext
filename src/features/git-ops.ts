@@ -7,7 +7,7 @@ import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
 import { git, gitBranchState, repositoryRoot } from '../git.ts'
 import type { Config, GitConfig } from '../config.ts'
 import { resolveRoot, containedPath } from './explorer.ts'
-import { cached, hashText } from './llm-cache.ts'
+import { cached, hashText, trimUnresolvedToolCalls } from './llm-cache.ts'
 import type {
   GenerateCommitResult,
   GitBranchesResult,
@@ -1154,6 +1154,17 @@ export function mountGitOps(
 
     const gitSettings = config().git
 
+    const sessionsStore = ctx.get('sessions') as { get?: (id: unknown) => unknown } | undefined
+    const liveSession = sess ? sessionsStore?.get?.(sess as never) as {
+      readonly id?: string
+      requestHeader?(): {
+        system?: string
+        tools?: readonly unknown[]
+        config?: { provider?: string; model?: string }
+      } | undefined
+      deriveMessages?(): readonly unknown[]
+    } | undefined : undefined
+
     // Exclude large compiled bundles, lockfiles, and binary assets so real source code diffs are prioritized
     const EXCLUDE_PATHSPECS = [
       '--',
@@ -1300,6 +1311,20 @@ export function mountGitOps(
 
     const finalModel = chosenModel || (chosenProvider.includes('deepseek') ? 'deepseek-chat' : 'gpt-4o-mini')
 
+    // KV-cache reuse: when the selected route is the same as the live session's
+    // last routed request, replay that warm prefix and append the commit prompt
+    // as a trailing user message. This makes the auxiliary call a prefix
+    // extension of the conversation, so the provider reuses cached tokens.
+    const commitReuse = (() => {
+      const header = liveSession?.requestHeader?.()
+      const rawHistory = liveSession?.deriveMessages?.()
+      const history = rawHistory === undefined ? undefined : trimUnresolvedToolCalls(rawHistory)
+      if (header?.config?.provider == null || header.config.model == null) return undefined
+      if (history === undefined || history.length === 0) return undefined
+      if (chosenProvider !== header.config.provider || finalModel !== header.config.model) return undefined
+      return { header, history }
+    })()
+
     const style = typeof data.style === 'string' ? data.style : gitSettings.commitStyle
     const lang = typeof data.lang === 'string' ? data.lang : gitSettings.commitLanguage
 
@@ -1325,15 +1350,26 @@ export function mountGitOps(
         let streamError: string | null = null
         let hitMaxTokens = false
 
+        const reuseActive = commitReuse !== undefined
+        const trailing = reuseActive
+          ? `${user}\n\nCommit message rules:\n${system}`
+          : user
         const stream = llmService.stream({
           provider: prov,
           model: mod,
-          system,
-          messages: [{
-            id: `msg-commit-${Date.now()}` as never,
-            role: 'user',
-            content: [{ type: 'text', text: user }],
-          }] as never,
+          system: reuseActive ? commitReuse.header.system : system,
+          ...(reuseActive && commitReuse.header.tools !== undefined ? { tools: commitReuse.header.tools as never } : {}),
+          messages: reuseActive
+            ? [
+                ...commitReuse.history,
+                { id: `msg-commit-${Date.now()}` as never, role: 'user', content: [{ type: 'text', text: trailing }] },
+              ] as never
+            : [{
+                id: `msg-commit-${Date.now()}` as never,
+                role: 'user',
+                content: [{ type: 'text', text: user }],
+              }] as never,
+          ...(reuseActive && liveSession?.id !== undefined ? { sessionId: liveSession.id as never } : {}),
           maxTokens: 2048,
           temperature: 0.2,
           signal: controller.signal,
