@@ -291,33 +291,34 @@ export function useActiveWorkspace(useWorkspaces?: WorkspacesHook | undefined): 
  */
 const WIDTH_KEY = 'dsh-dev-tool-ext:side-panel-width'
 
-/** Bounds. Narrower than ~220px cannot show a file name; wider than 900 crowds out the chat. */
+/** Bounds. Narrower than ~220px cannot show a file name. The right panel has no upper bound so it can be dragged as far left as the user wants; the left panel keeps a cap so it cannot crowd out the chat. */
 export const MIN_PANEL_WIDTH = 220
 export const MAX_PANEL_WIDTH = 900
 export const DEFAULT_PANEL_WIDTH = 340
 
-function readWidth(): number {
+function readWidth(side?: 'left' | 'right'): number {
   try {
     const stored = window.localStorage.getItem(WIDTH_KEY)
     if (stored === null) return DEFAULT_PANEL_WIDTH
     const parsed = Number(stored)
     if (!Number.isFinite(parsed)) return DEFAULT_PANEL_WIDTH
-    return clampWidth(parsed)
+    return clampWidth(parsed, side)
   } catch {
     return DEFAULT_PANEL_WIDTH
   }
 }
 
-export function clampWidth(value: number): number {
-  return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, Math.round(value)))
+export function clampWidth(value: number, side?: 'left' | 'right'): number {
+  const rounded = Math.max(MIN_PANEL_WIDTH, Math.round(value))
+  return side === 'right' ? rounded : Math.min(MAX_PANEL_WIDTH, rounded)
 }
 
 let width: number | undefined
 const widthListeners = new Set<() => void>()
 
 /** Publish a new width to every subscriber, and remember it. */
-export function setPanelWidth(next: number): void {
-  const clamped = clampWidth(next)
+export function setPanelWidth(next: number, side?: 'left' | 'right'): void {
+  const clamped = clampWidth(next, side)
   if (width === clamped) return
   width = clamped
   try {
@@ -333,9 +334,9 @@ export function setPanelWidth(next: number): void {
  * the drag handle, the panel, and the effect that reserves room on the
  * conversation column are not in one React tree.
  */
-export function usePanelWidth(): number {
+export function usePanelWidth(side?: 'left' | 'right'): number {
   const [, bump] = useState(0)
-  if (width === undefined) width = readWidth()
+  if (width === undefined) width = readWidth(side)
 
   useEffect(() => {
     const listener = () => { bump(n => n + 1) }

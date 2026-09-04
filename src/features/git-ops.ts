@@ -1032,14 +1032,48 @@ export function mountGitOps(
     if (!repo) throw new ApiError(400, 'Current workspace is not a git repository')
 
     const gitSettings = config().git
-    const remote = typeof data.remote === 'string' ? data.remote.trim() : 'origin'
     const branchState = await gitBranchState(repo, controller.signal)
     const branch = typeof data.branch === 'string' ? data.branch.trim() : branchState.branch
 
+    // Resolve the push target without assuming the remote is named "origin".
+    // Local repositories frequently use a custom remote name (for example
+    // "dsh-ext" or "upstream"), and pushing should honour the current branch's
+    // configured upstream before falling back to "origin" or the first remote.
+    const requestedRemote = typeof data.remote === 'string' ? data.remote.trim() : ''
+    const remotesResult = await git(['remote'], { cwd: repo, signal: controller.signal })
+    const remotes = remotesResult.ok
+      ? remotesResult.stdout.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+      : []
+
+    let upstreamRemote: string | undefined
+    if (!requestedRemote && branch) {
+      const upstreamResult = await git(['config', '--get', `branch.${branch}.remote`], { cwd: repo, signal: controller.signal })
+      const value = upstreamResult.ok ? upstreamResult.stdout.trim() : ''
+      if (value.length > 0 && value !== '.') upstreamRemote = value
+    }
+
+    const remote = requestedRemote
+      || upstreamRemote
+      || (remotes.includes('origin') ? 'origin' : remotes[0] ?? '')
+    if (!remote) {
+      return {
+        ok: false,
+        message: '当前仓库没有配置任何 Git 远程仓库（remote），请先添加远程仓库后再推送。',
+      } as GitPushResult
+    }
+
     const setUpstream = data.setUpstream === true || gitSettings.pushAutoSetUpstream
     const args = ['push']
-    if (setUpstream && branch) {
-      args.push('-u', remote, branch)
+    // If the branch already has a configured upstream (possibly a non-origin
+    // remote), let git push use it directly. Otherwise push to the resolved
+    // remote, setting upstream when requested.
+    if (!upstreamRemote || requestedRemote) {
+      if (setUpstream && branch) {
+        args.push('-u', remote, branch)
+      } else {
+        args.push(remote)
+        if (branch) args.push(branch)
+      }
     }
 
     const timeoutMs = (gitSettings.pushTimeoutSeconds || 60) * 1000

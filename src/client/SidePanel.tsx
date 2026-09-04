@@ -59,7 +59,7 @@ function centreColumn(): HTMLElement | undefined {
 export function SidePanel(props: SidePanelProps) {
   const t = useT()
   const open = usePanelOpen(props.defaultOpen)
-  const width = usePanelWidth()
+  const width = usePanelWidth(props.side)
   // Read by the padding effect to suppress its transition mid-drag. A ref, not
   // state: it must not itself trigger the render it is describing.
   const dragging = useRef(false)
@@ -117,7 +117,7 @@ export function SidePanel(props: SidePanelProps) {
       // A right-docked panel grows as the pointer moves LEFT, so the delta is
       // signed by the side rather than taken absolutely.
       const delta = props.side === 'right' ? startX - move.clientX : move.clientX - startX
-      setPanelWidth(clampWidth(startWidth + delta))
+      setPanelWidth(clampWidth(startWidth + delta, props.side), props.side)
     }
     const onUp = () => {
       dragging.current = false
@@ -164,12 +164,12 @@ export function SidePanel(props: SidePanelProps) {
         aria-orientation="vertical"
         aria-valuenow={width}
         aria-valuemin={MIN_PANEL_WIDTH}
-        aria-valuemax={MAX_PANEL_WIDTH}
+        aria-valuemax={props.side === 'right' ? undefined : MAX_PANEL_WIDTH}
         onPointerDown={onHandleDown}
         onKeyDown={(event) => {
           const step = event.shiftKey ? 64 : 16
-          if (event.key === 'ArrowLeft') setPanelWidth(width + (props.side === 'right' ? step : -step))
-          else if (event.key === 'ArrowRight') setPanelWidth(width + (props.side === 'right' ? -step : step))
+          if (event.key === 'ArrowLeft') setPanelWidth(width + (props.side === 'right' ? step : -step), props.side)
+          else if (event.key === 'ArrowRight') setPanelWidth(width + (props.side === 'right' ? -step : step), props.side)
           else return
           event.preventDefault()
         }}
