@@ -186,7 +186,7 @@ export function injectBadgeStyles(): void {
  */
 [data-composer-card][data-has-balance-badge],
 [data-composer-card][data-has-git-controls] {
-  padding-top: 36px !important;
+  padding-top: 26px !important;
   gap: 6px !important;
 }
 
@@ -327,7 +327,7 @@ try {
  * off-peak marker beside the amount, and a shake-and-float "damage" effect
  * whenever the balance drops between polls.
  */
-export function BalanceBadge(props: { cardEl?: HTMLElement | null; inline?: boolean }) {
+export function BalanceBadge(props: { cardEl?: HTMLElement | null; inline?: boolean; variant?: 'composer' | 'hero' }) {
   const t = useT()
   injectBadgeStyles()
   const config = useClientConfig()
@@ -492,6 +492,9 @@ export function BalanceBadge(props: { cardEl?: HTMLElement | null; inline?: bool
 
   if (primary === undefined) return null
 
+  // New-session hero keeps the capsule; old-session composer uses bare text.
+  const isCapsule = props.variant === 'hero'
+
   const handleBadgeClick = (e: React.MouseEvent) => {
     // 双击：触发大额【暴击 (CRIT)】5段扣血重创！
     // Alt/Shift+单击：触发小额【普通扣血 (不暴击)】5段扣血！
@@ -551,27 +554,33 @@ export function BalanceBadge(props: { cardEl?: HTMLElement | null; inline?: bool
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        height: 28,
+        height: isCapsule ? 28 : undefined,
         boxSizing: 'border-box',
         fontSize: 12,
         fontWeight: 500,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-        padding: '0 10px',
-        borderRadius: 14,
+        padding: isCapsule ? '0 10px' : '2px 2px',
+        borderRadius: isCapsule ? 14 : 0,
         lineHeight: '20px',
-        background: isHurt
+        background: isHurt && isCapsule
           ? 'rgba(239, 68, 68, 0.12)'
-          : 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))',
-        border: isHurt ? '1px solid rgba(239, 68, 68, 0.55)' : `1px solid ${token.border}`,
-        backdropFilter: 'blur(8px)',
+          : isCapsule
+            ? 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))'
+            : 'transparent',
+        border: isHurt && isCapsule
+          ? '1px solid rgba(239, 68, 68, 0.55)'
+          : isCapsule ? `1px solid ${token.border}` : 'none',
+        backdropFilter: isCapsule ? 'blur(8px)' : 'none',
         whiteSpace: 'nowrap',
         userSelect: 'none',
         cursor: 'pointer',
         color: view.data?.available === false ? token.danger : token.textMuted,
-        boxShadow: isHurt
+        boxShadow: isHurt && isCapsule
           ? '0 0 8px rgba(239, 68, 68, 0.3)'
-          : '0 1px 3px rgba(0, 0, 0, 0.08)',
-        transition: 'background 0.8s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.8s cubic-bezier(0.16, 1, 0.3, 1), color 0.8s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.8s cubic-bezier(0.16, 1, 0.3, 1)',
+          : isCapsule
+            ? '0 1px 3px rgba(0, 0, 0, 0.08)'
+            : 'none',
+        transition: 'color 0.8s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
     >
       <span style={{ color: peak ? token.warn : token.success, fontWeight: 500 }}>{peakText}</span>

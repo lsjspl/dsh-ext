@@ -178,10 +178,10 @@ export function UserEditBubble(props: {
       <div data-dsh-plugin="dsh-ext" data-dsh-part="user-edit" style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '6px 0 10px' }}>
         <div
           style={{
-            borderRadius: 16,
+            borderRadius: 22,
             border: `1px solid ${token.border}`,
-            background: token.surface,
-            padding: '10px 12px',
+            background: 'var(--dsw-specific-bubble, var(--dsw-alias-bg-layer-2, transparent))',
+            padding: '10px 16px',
             display: 'flex',
             flexDirection: 'column',
             gap: 8,
@@ -284,15 +284,16 @@ export function UserEditBubble(props: {
       {text.length > 0 && (
         <div
           style={{
-            maxWidth: '80%',
-            background: 'var(--dsw-alias-bg-layer-2, ' + token.surface + ')',
+            maxWidth: 'min(525px, 82%)',
+            background: 'var(--dsw-specific-bubble, var(--dsw-alias-bg-layer-2, transparent))',
             color: token.text,
-            borderRadius: 16,
-            padding: '9px 14px',
-            fontSize: 14,
-            lineHeight: 1.55,
+            borderRadius: 22,
+            padding: '10px 16px',
+            fontSize: 16,
+            lineHeight: '24px',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
+            boxSizing: 'border-box',
           }}
         >
           {text}

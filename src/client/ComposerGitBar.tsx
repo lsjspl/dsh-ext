@@ -4,7 +4,7 @@ import { Modal, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useResource } from './use-resource.ts'
 import { useT } from './use-locale.ts'
 import { token, buttonStyle } from './ui.tsx'
-import { FolderIcon, GitIcon, LockIcon, ChevronIcon, CheckIcon, PlusIcon } from './icons.tsx'
+import { FolderIcon, GitIcon, ChevronIcon, CheckIcon, PlusIcon } from './icons.tsx'
 
 export class GitErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
   state = { hasError: false }
@@ -57,23 +57,22 @@ const badgeChipStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  height: 28,
-  boxSizing: 'border-box',
   fontSize: 12,
   fontWeight: 500,
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-  padding: '0 10px',
-  borderRadius: 14,
   lineHeight: '20px',
-  background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))',
-  border: `1px solid ${token.border}`,
-  backdropFilter: 'blur(8px)',
+  color: token.text,
   whiteSpace: 'nowrap',
   userSelect: 'none',
   cursor: 'pointer',
-  color: token.text,
-  boxShadow: '0 1px 3px rgba(0, 0, 0, 0.08)',
-  transition: 'all 120ms ease',
+  // Old-session composer controls are intentionally plain text: no pill, no
+  // border, no background. The hero/new-session variant keeps the capsule look.
+  padding: '2px 2px',
+  borderRadius: 0,
+  background: 'transparent',
+  border: 'none',
+  boxShadow: 'none',
+  transition: 'color 120ms ease',
 }
 
 const popoverStyle: React.CSSProperties = {
@@ -813,7 +812,6 @@ export function ComposerGitControlsInner(props: {
               <span style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {worktreeDisplayName}
               </span>
-              <LockIcon size={11} style={{ opacity: 0.65, marginLeft: 1 }} />
             </div>
           ) : (
             <button
@@ -828,14 +826,20 @@ export function ComposerGitControlsInner(props: {
                 cursor: 'pointer',
               }}
               onMouseEnter={e => {
-                e.currentTarget.style.backgroundColor = props.variant === 'hero'
-                  ? 'var(--dsw-alias-interactive-bg-hover, rgba(125, 125, 125, 0.22))'
-                  : 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.22))'
+                if (props.variant === 'hero') {
+                  e.currentTarget.style.backgroundColor = 'var(--dsw-alias-interactive-bg-hover, rgba(125, 125, 125, 0.22))'
+                } else {
+                  e.currentTarget.style.backgroundColor = 'transparent'
+                  e.currentTarget.style.color = 'var(--dsw-alias-state-business-primary, #3b82f6)'
+                }
               }}
               onMouseLeave={e => {
-                e.currentTarget.style.backgroundColor = props.variant === 'hero'
-                  ? 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))'
-                  : 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))'
+                if (props.variant === 'hero') {
+                  e.currentTarget.style.backgroundColor = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))'
+                } else {
+                  e.currentTarget.style.backgroundColor = 'transparent'
+                  e.currentTarget.style.color = token.text
+                }
               }}
             >
               <FolderIcon size={13} style={{ color: 'inherit' }} />
@@ -999,7 +1003,6 @@ export function ComposerGitControlsInner(props: {
               </span>
               {ahead > 0 && <span style={{ color: token.success, fontSize: 10.5, fontWeight: 600 }}>↑{ahead}</span>}
               {behind > 0 && <span style={{ color: token.warn, fontSize: 10.5, fontWeight: 600 }}>↓{behind}</span>}
-              <LockIcon size={11} style={{ opacity: 0.65, marginLeft: 1 }} />
             </div>
           ) : (
             <button
@@ -1018,14 +1021,20 @@ export function ComposerGitControlsInner(props: {
                 cursor: 'pointer',
               }}
               onMouseEnter={e => {
-                e.currentTarget.style.backgroundColor = props.variant === 'hero'
-                  ? 'var(--dsw-alias-interactive-bg-hover, rgba(125, 125, 125, 0.22))'
-                  : 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.22))'
+                if (props.variant === 'hero') {
+                  e.currentTarget.style.backgroundColor = 'var(--dsw-alias-interactive-bg-hover, rgba(125, 125, 125, 0.22))'
+                } else {
+                  e.currentTarget.style.backgroundColor = 'transparent'
+                  e.currentTarget.style.color = 'var(--dsw-alias-state-business-primary, #3b82f6)'
+                }
               }}
               onMouseLeave={e => {
-                e.currentTarget.style.backgroundColor = props.variant === 'hero'
-                  ? 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))'
-                  : 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))'
+                if (props.variant === 'hero') {
+                  e.currentTarget.style.backgroundColor = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))'
+                } else {
+                  e.currentTarget.style.backgroundColor = 'transparent'
+                  e.currentTarget.style.color = token.text
+                }
               }}
             >
               <GitIcon size={13} style={{ color: 'inherit' }} />

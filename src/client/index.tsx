@@ -551,10 +551,10 @@ function registerBalanceBadge(ctx: Context): void {
                 }}
               >
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, pointerEvents: 'auto' }}>
-                  {showGit && <ComposerGitControls workspaceRoot={activeWorkspace} sessionId={effectiveGitSessionId} />}
+                  {showGit && <ComposerGitControls workspaceRoot={activeWorkspace} sessionId={effectiveGitSessionId} variant={isHero ? 'hero' : 'composer'} />}
                 </div>
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, pointerEvents: 'auto' }}>
-                  {showBalance && <BalanceBadge cardEl={cardEl} inline />}
+                  {showBalance && <BalanceBadge cardEl={cardEl} inline variant={isHero ? 'hero' : 'composer'} />}
                 </div>
               </div>,
               cardEl
