@@ -13,6 +13,7 @@ import type {
   GitBranchInfo,
   GitCommitResult,
   GitDiscardResult,
+  GitInitResult,
   GitPushResult,
   GitStageResult,
   GitWorktreeInfo,
@@ -545,6 +546,31 @@ export function mountGitOps(
       isDetached: branchState.isDetached,
       isUnborn: branchState.isUnborn,
     } as SessionBindingResult
+  }
+
+  const handleGitInit: ApiHandler = async ({ body, req }) => {
+    if (!config().explorer.enabled || !config().git.enabled) {
+      throw new ApiError(404, 'Git operations are switched off')
+    }
+    const controller = new AbortController()
+    req.on('close', () => { controller.abort() })
+
+    const data = asRecord(body)
+    const ws = typeof data.workspace === 'string' ? data.workspace : (typeof data.workspaceRoot === 'string' ? data.workspaceRoot : null)
+    const sess = typeof data.session === 'string' ? data.session : (typeof data.sessionId === 'string' ? data.sessionId : null)
+    const { root } = await resolveRoot(ctx, ws, sess, controller.signal)
+
+    const existing = await repositoryRoot(root, controller.signal)
+    if (existing) {
+      return { ok: true, already: true, message: 'Already a git repository' } as GitInitResult
+    }
+
+    const result = await git(['init', '--quiet'], { cwd: root, signal: controller.signal })
+    if (!result.ok) {
+      throw new ApiError(400, `初始化 Git 仓库失败: ${result.stderr || result.stdout}`)
+    }
+
+    return { ok: true, message: result.stdout || 'Git repository initialized' } as GitInitResult
   }
 
   const handleBind: ApiHandler = async ({ body, req }) => {
@@ -1383,6 +1409,10 @@ export function mountGitOps(
     // 2. Set Session-Git Binding (and optionally create branch / worktree)
     '/explorer/git/bind': handleBind,
     '/explorer/git/session-bind': handleBind,
+
+    // 2.5 Initialize a Git repository in the selected workspace
+    '/explorer/git/init': handleGitInit,
+    '/explorer/git/init-repo': handleGitInit,
 
     // 3. List Branches
     '/explorer/git/branches': handleBranches,

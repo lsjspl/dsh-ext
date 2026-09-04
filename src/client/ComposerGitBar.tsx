@@ -599,12 +599,14 @@ export function ComposerGitControlsInner(props: {
   const isLocked = !isNewSession || binding.data?.binding?.locked === true
 
   // Force close popovers when locked - MUST be called unconditionally before any early returns!
+  // Non-repository workspaces are exempt: there is no branch binding to lock,
+  // and the worktree chip is still useful for showing the workspace or initing git.
   useEffect(() => {
-    if (isLocked) {
+    if (isLocked && status.data?.isRepository !== false) {
       setWorktreeOpen(false)
       setBranchOpen(false)
     }
-  }, [isLocked])
+  }, [isLocked, status.data?.isRepository])
 
   // Clear optimistic branch once backend resource confirms the branch
   useEffect(() => {
@@ -615,8 +617,10 @@ export function ComposerGitControlsInner(props: {
 
   // Early returns ONLY AFTER ALL HOOKS HAVE BEEN CALLED!
   if (config?.git.enabled !== true) return null
-  if (!status.data?.isRepository) return null
+  if (!status.data) return null
 
+  const isGitRepo = Boolean(status.data?.isRepository)
+  const worktreeLocked = isGitRepo && isLocked
   const allWorktrees = worktrees.data?.worktrees ?? []
   const normWorkspace = (status.data?.root || workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
   const currentWt = allWorktrees.find(w => w.isCurrent)
@@ -748,6 +752,33 @@ export function ComposerGitControlsInner(props: {
     }
   }
 
+  // Initialize a Git repository when the selected workspace is not one yet.
+  const handleInitGit = async () => {
+    setBusy(true)
+    try {
+      const res = await callApi<{ ok: boolean; message?: string }>('/explorer/git/init', {
+        body: {
+          workspace: status.data?.root || workspaceRoot,
+          session: props.sessionId,
+        },
+      })
+      if (res.ok) {
+        setToastText(t('git.initSuccess'))
+        setWorktreeOpen(false)
+        status.reload()
+        worktrees.reload()
+        branches.reload()
+        binding.reload?.()
+      } else {
+        setToastText(t('git.initFailed', { message: res.message || '' }))
+      }
+    } catch (err: unknown) {
+      setToastText(t('git.initFailed', { message: err instanceof Error ? err.message : String(err) }))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <>
       {toastText && (
@@ -764,7 +795,7 @@ export function ComposerGitControlsInner(props: {
       >
         {/* 1. Worktree Dropdown / Locked Chip */}
         <div ref={worktreeRef} style={{ position: 'relative', display: 'inline-block' }}>
-          {isLocked ? (
+          {worktreeLocked ? (
             <div
               role="status"
               title={`${isMainWorktree ? t('git.mainWorkspacePrefix') : t('git.worktreeOfPrefix', { name: mainRepoName })} ${worktreeDisplayName} (当前会话已锁定，不可切换)`}
@@ -819,12 +850,19 @@ export function ComposerGitControlsInner(props: {
           )}
 
           {/* Worktree Popover (Only in New Session) */}
-          {!isLocked && worktreeOpen && (
+          {!worktreeLocked && worktreeOpen && (
             <div style={{ ...popoverStyle, left: 0 }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: token.textMuted, padding: '4px 8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                 {t('git.worktreeDropdown')}
               </div>
 
+              {!isGitRepo && (
+                <div style={{ fontSize: 12, color: token.textMuted, padding: '6px 10px', lineHeight: '18px' }}>
+                  {t('git.notRepository')}
+                </div>
+              )}
+
+              {isGitRepo && (
               <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {/* Main Worktree */}
                 {allWorktrees.filter(w => w.isMain).map(wt => {
@@ -901,28 +939,45 @@ export function ComposerGitControlsInner(props: {
                   </div>
                 )}
               </div>
+              )}
 
-              {/* Create Worktree Button */}
+              {/* Worktree / Initialize Git Action Button */}
               <div style={{ borderTop: `1px solid ${token.border}`, paddingTop: 4, marginTop: 2 }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setWorktreeOpen(false)
-                    setCreateWorktreeOpen(true)
-                  }}
-                  style={bottomActionBtnStyle}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))' }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-                >
-                  <PlusIcon size={13} />
-                  <span>{t('git.createWorktreeAction')}</span>
-                </button>
+                {isGitRepo ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWorktreeOpen(false)
+                      setCreateWorktreeOpen(true)
+                    }}
+                    style={bottomActionBtnStyle}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))' }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                  >
+                    <PlusIcon size={13} />
+                    <span>{t('git.createWorktreeAction')}</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={handleInitGit}
+                    title={t('git.initRepositoryHint')}
+                    style={bottomActionBtnStyle}
+                    onMouseEnter={e => { if (!busy) e.currentTarget.style.background = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))' }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                  >
+                    <PlusIcon size={13} />
+                    <span>{t('git.initRepository')}</span>
+                  </button>
+                )}
               </div>
             </div>
           )}
         </div>
 
-        {/* 2. Branch Dropdown / Locked Chip */}
+        {/* 2. Branch Dropdown / Locked Chip (hidden when workspace is not a git repo) */}
+        {isGitRepo && (
         <div ref={branchRef} style={{ position: 'relative', display: 'inline-block' }}>
           {isLocked ? (
             <div
@@ -1128,6 +1183,7 @@ export function ComposerGitControlsInner(props: {
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/* Dedicated Modals */}

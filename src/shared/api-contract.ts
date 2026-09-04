@@ -449,6 +449,12 @@ export interface GitPushResult {
   readonly rejected?: boolean
 }
 
+export interface GitInitResult {
+  readonly ok: boolean
+  readonly message?: string
+  readonly already?: boolean
+}
+
 export interface GenerateCommitResult {
   readonly ok: boolean
   readonly fullMessage: string

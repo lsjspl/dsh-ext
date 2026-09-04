@@ -474,6 +474,11 @@ export const en = {
   'git.worktreeTag': '{name} Worktree',
   'git.mainWorkspacePrefix': 'Main:',
   'git.branchPrefix': 'Branch:',
+  'git.notRepository': 'Current workspace is not a Git repository',
+  'git.initRepository': 'Initialize Git repository',
+  'git.initRepositoryHint': 'Run git init in this workspace',
+  'git.initSuccess': 'Git repository initialized',
+  'git.initFailed': 'Failed to initialize Git repository: {message}',
 } as const
 
 export type LocaleKey = keyof typeof en
@@ -928,6 +933,11 @@ export const zh: Record<LocaleKey, string> = {
   'git.worktreeTag': '{name} 的 Worktree',
   'git.mainWorkspacePrefix': '主工作区:',
   'git.branchPrefix': '分支:',
+  'git.notRepository': '当前工作区还不是 Git 仓库',
+  'git.initRepository': '初始化 Git 仓库',
+  'git.initRepositoryHint': '在当前工作区执行 git init',
+  'git.initSuccess': 'Git 仓库初始化成功',
+  'git.initFailed': '初始化 Git 仓库失败: {message}',
 }
 
 /** Both dictionaries, in the shape `ctx.locale.register` takes. */
