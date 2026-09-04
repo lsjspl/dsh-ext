@@ -7,6 +7,7 @@ import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
 import { git, gitBranchState, repositoryRoot } from '../git.ts'
 import type { Config, GitConfig } from '../config.ts'
 import { resolveRoot, containedPath } from './explorer.ts'
+import { cached, hashText } from './llm-cache.ts'
 import type {
   GenerateCommitResult,
   GitBranchesResult,
@@ -28,6 +29,9 @@ import type {
 function asRecord(val: unknown): Record<string, unknown> {
   return (typeof val === 'object' && val !== null) ? (val as Record<string, unknown>) : {}
 }
+
+/** How long an identical commit-generation request may reuse the previous AI message. */
+const COMMIT_CACHE_TTL_MS = 10 * 60_000
 
 /**
  * Normalize paths for cross-platform consistency, especially Windows drive letter case
@@ -1302,69 +1306,83 @@ export function mountGitOps(
     const { system, user } = buildCommitPrompt(truncatedDiff, statText, style, lang)
 
     async function streamCommit(prov: string, mod: string): Promise<string> {
-      let textAnswer = ''
-      let reasoningAnswer = ''
-      let blockEndText = ''
-      let streamError: string | null = null
-      let hitMaxTokens = false
+      // Cache identical generation requests: same provider/model, prompt style,
+      // language, and the exact staged diff produce the same commit message, so
+      // a repeat request can skip the paid model call.
+      const commitCacheKey = hashText([
+        prov,
+        mod,
+        style,
+        lang,
+        truncatedDiff,
+        statText,
+      ].join('\u0000'))
 
-      const stream = llmService.stream({
-        provider: prov,
-        model: mod,
-        system,
-        messages: [{
-          id: `msg-commit-${Date.now()}` as never,
-          role: 'user',
-          content: [{ type: 'text', text: user }],
-        }] as never,
-        maxTokens: 2048,
-        temperature: 0.2,
-        signal: controller.signal,
+      return cached<string>(commitCacheKey, COMMIT_CACHE_TTL_MS, async () => {
+        let textAnswer = ''
+        let reasoningAnswer = ''
+        let blockEndText = ''
+        let streamError: string | null = null
+        let hitMaxTokens = false
+
+        const stream = llmService.stream({
+          provider: prov,
+          model: mod,
+          system,
+          messages: [{
+            id: `msg-commit-${Date.now()}` as never,
+            role: 'user',
+            content: [{ type: 'text', text: user }],
+          }] as never,
+          maxTokens: 2048,
+          temperature: 0.2,
+          signal: controller.signal,
+        })
+
+        for await (const chunk of stream) {
+          if (chunk.type === 'text-delta') {
+            textAnswer += chunk.text
+          } else if (chunk.type === 'reasoning-delta') {
+            reasoningAnswer += chunk.text
+          } else if (chunk.type === 'block-end') {
+            const b = (chunk as { block?: { type?: string; text?: string } }).block
+            if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0) {
+              blockEndText = b.text
+            } else if (b?.type === 'reasoning' && typeof b.text === 'string' && b.text.trim().length > 0) {
+              if (!reasoningAnswer) reasoningAnswer = b.text
+            }
+          } else if (chunk.type === 'finish') {
+            if (chunk.reason.kind === 'error') {
+              streamError = (chunk.reason as { failure?: { message?: string } }).failure?.message || 'LLM 提供商返回错误'
+            } else if (chunk.reason.kind === 'aborted') {
+              streamError = (chunk.reason as { failure?: { message?: string } }).failure?.message || 'LLM 请求被中断'
+            } else if (chunk.reason.kind === 'max-tokens') {
+              hitMaxTokens = true
+            }
+          }
+        }
+
+        if (streamError) {
+          throw new Error(streamError)
+        }
+
+        let answer = textAnswer.trim()
+        if (!answer && blockEndText.trim()) {
+          answer = blockEndText.trim()
+        }
+        if (!answer && reasoningAnswer.trim()) {
+          answer = extractCommitFromReasoning(reasoningAnswer)
+        }
+
+        if (!answer) {
+          if (hitMaxTokens) {
+            throw new Error('模型输出超出 Token 限制且未生成有效提交说明')
+          }
+          throw new Error('模型返回的提交说明为空')
+        }
+
+        return answer
       })
-
-      for await (const chunk of stream) {
-        if (chunk.type === 'text-delta') {
-          textAnswer += chunk.text
-        } else if (chunk.type === 'reasoning-delta') {
-          reasoningAnswer += chunk.text
-        } else if (chunk.type === 'block-end') {
-          const b = (chunk as { block?: { type?: string; text?: string } }).block
-          if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0) {
-            blockEndText = b.text
-          } else if (b?.type === 'reasoning' && typeof b.text === 'string' && b.text.trim().length > 0) {
-            if (!reasoningAnswer) reasoningAnswer = b.text
-          }
-        } else if (chunk.type === 'finish') {
-          if (chunk.reason.kind === 'error') {
-            streamError = (chunk.reason as { failure?: { message?: string } }).failure?.message || 'LLM 提供商返回错误'
-          } else if (chunk.reason.kind === 'aborted') {
-            streamError = (chunk.reason as { failure?: { message?: string } }).failure?.message || 'LLM 请求被中断'
-          } else if (chunk.reason.kind === 'max-tokens') {
-            hitMaxTokens = true
-          }
-        }
-      }
-
-      if (streamError) {
-        throw new Error(streamError)
-      }
-
-      let answer = textAnswer.trim()
-      if (!answer && blockEndText.trim()) {
-        answer = blockEndText.trim()
-      }
-      if (!answer && reasoningAnswer.trim()) {
-        answer = extractCommitFromReasoning(reasoningAnswer)
-      }
-
-      if (!answer) {
-        if (hitMaxTokens) {
-          throw new Error('模型输出超出 Token 限制且未生成有效提交说明')
-        }
-        throw new Error('模型返回的提交说明为空')
-      }
-
-      return answer
     }
 
     try {

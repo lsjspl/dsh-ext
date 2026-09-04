@@ -7,6 +7,7 @@ import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
 import { DEFAULT_DELETE_PATTERNS, DEFAULT_READ_PATTERNS, type Config, type CommandReviewConfig } from '../config.ts'
 import type { AuditEntry, ReviewVerdict } from '../shared/api-contract.ts'
+import { cached, hashText } from './llm-cache.ts'
 
 /**
  * Feature 4 — a second model reviews high-risk tool calls before they run.
@@ -35,6 +36,8 @@ const COMMAND_FIELDS: readonly string[] = ['command', 'cmd', 'script', 'code', '
 const MAX_REVIEW_CHARS = 8_000
 /** Audit rows hold a display-sized excerpt, not the whole command. */
 const MAX_AUDIT_CHARS = 400
+/** How long an identical review request may reuse the previous model verdict. */
+const REVIEW_CACHE_TTL_MS = 10 * 60_000
 
 const SYSTEM_PROMPT = `You are a command safety reviewer inside a developer tool.
 You judge ONE proposed command that an AI coding agent wants to run on the user's machine.
@@ -187,31 +190,45 @@ async function askReviewer(
       ? `${command.slice(0, MAX_REVIEW_CHARS)}\n…(truncated)`
       : command
 
-    let answer = ''
-    const stream = llm.stream({
-      provider: settings.provider,
-      model: settings.model,
-      system: SYSTEM_PROMPT,
-      messages: [{
-        role: 'user',
-        content: [{
-          type: 'text',
-          // Fenced and labelled so the reviewer can tell the command apart
-          // from its own instructions even when the command contains prose.
-          text: `Tool: ${tool}\n\nProposed command:\n\`\`\`\n${excerpt}\n\`\`\``,
-        }],
-      }] as never,
-      maxTokens: 300,
-      temperature: 0,
-      signal: deadline.signal,
-    })
+    // Cache identical review requests for a short window: exact same provider,
+    // model, tool, and command text get the previous verdict instead of another
+    // paid model call. Dynamic/error outcomes are never cached.
+    const cacheKey = hashText([
+      settings.provider,
+      settings.model,
+      tool,
+      excerpt,
+    ].join('\u0000'))
 
-    for await (const chunk of stream) {
-      if (chunk.type === 'text-delta') answer += chunk.text
-    }
-    // A stream that failed mid-flight yields no parseable verdict, which the
-    // caller already treats as a reviewer failure — no separate check needed.
-    return parseVerdict(answer)
+    return await cached<ModelVerdict>(cacheKey, REVIEW_CACHE_TTL_MS, async () => {
+      let answer = ''
+      const stream = llm.stream({
+        provider: settings.provider,
+        model: settings.model,
+        system: SYSTEM_PROMPT,
+        messages: [{
+          role: 'user',
+          content: [{
+            type: 'text',
+            // Fenced and labelled so the reviewer can tell the command apart
+            // from its own instructions even when the command contains prose.
+            text: `Tool: ${tool}\n\nProposed command:\n\`\`\`\n${excerpt}\n\`\`\``,
+          }],
+        }] as never,
+        maxTokens: 300,
+        temperature: 0,
+        signal: deadline.signal,
+      })
+
+      for await (const chunk of stream) {
+        if (chunk.type === 'text-delta') answer += chunk.text
+      }
+      const verdict = parseVerdict(answer)
+      // A stream that failed mid-flight or produced an unparseable answer is a
+      // reviewer failure, so it must NOT enter the cache.
+      if (verdict === undefined) throw new Error('unparseable reviewer response')
+      return verdict
+    })
   } catch {
     return undefined
   } finally {

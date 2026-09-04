@@ -34,10 +34,10 @@ import { ComposerImages } from './ComposerImages.tsx'
 import { SidePanel } from './SidePanel.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 import { BalanceBadge, injectBadgeStyles } from './BalanceView.tsx'
-import { hasImagePicker, openImagePicker, subscribeImagePicker } from './picker-channel.ts'
+import { hasImagePicker, openImagePicker } from './picker-channel.ts'
 import { DICTS, LOCALE_NS } from './locales.ts'
 import { provideLocale, translate, useT } from './use-locale.ts'
-import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, ShieldCheckIcon, VscodeIcon, FolderIcon, IdeaIcon, TrashIcon, GitIcon, LockIcon, iconButtonStyle } from './icons.tsx'
+import { PanelLeftIcon, PanelRightIcon, ShieldCheckIcon, VscodeIcon, FolderIcon, IdeaIcon, TrashIcon, GitIcon, LockIcon, iconButtonStyle } from './icons.tsx'
 import { Toast, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { callApi } from './api.ts'
 import { useResource } from './use-resource.ts'
@@ -197,57 +197,6 @@ function registerComposerImages(ctx: Context): void {
           actions={props.inputActions}
           dragEnabled={config.imageComposer.dragReorder}
         />
-      )
-    }))
-  })
-
-  registerImageTrigger(ctx)
-}
-
-/**
- * The attach-file button, in the composer tool row beside the `+` launcher.
- *
- * One click opens the OS file dialog — no menu, no popup. The `+` launcher's own
- * first-level menu is handled separately by `registerPlusAttachEntry`; this
- * button is the always-visible one-click shortcut beside it.
- *
- * This deliberately does NOT browse the workspace: `@` already inserts workspace
- * file references, and a second browser for the same files would be a worse
- * duplicate of it. What the OS dialog adds is the thing `@` cannot reach — a
- * file from ANYWHERE on the machine, including outside the workspace.
- *
- * `input.phase` gates it: attaching mid-send would change what is being sent, so
- * the button is disabled during `'adjudicating' | 'claimed' | 'submitting'`.
- */
-function registerImageTrigger(ctx: Context): void {
-  trySlot('composer attach button', () => {
-    ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
-      name: 'conversation.input.left',
-      id: 'dsh-ext-attach',
-      order: 0,
-      registrant: 'dsh-ext',
-    }, function DevToolAttachButton(props) {
-      const t = useT()
-      const config = useClientConfig()
-      const input = props.useInput(state => state)
-      const ready = useSyncExternalStore(subscribeImagePicker, hasImagePicker, () => false)
-      if (config?.imageComposer.enabled !== true || !config.imageComposer.pickerButton) return null
-
-      const busy = input?.phase !== 'plain'
-      const disabled = !ready || busy
-      return (
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={openImagePicker}
-          aria-label={t('files.attach')}
-          title={t('files.attach')}
-          data-dsh-plugin="dsh-ext"
-          data-dsh-part="attach-button"
-          style={{ ...iconButtonStyle, opacity: disabled ? 0.45 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }}
-        >
-          <PaperclipIcon />
-        </button>
       )
     }))
   })
