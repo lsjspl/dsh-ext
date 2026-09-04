@@ -1077,7 +1077,14 @@ export function mountGitOps(
     }
 
     const timeoutMs = (gitSettings.pushTimeoutSeconds || 60) * 1000
-    const result = await git(args, { cwd: repo, timeoutMs, signal: controller.signal })
+    const result = await git(args, {
+      cwd: repo,
+      // Push is the one operation that may need the system Git credential
+      // manager, so re-enable reading the system gitconfig for this call.
+      env: { GIT_CONFIG_NOSYSTEM: '0' },
+      timeoutMs,
+      signal: controller.signal,
+    })
 
     if (!result.ok) {
       const errText = result.stderr || result.stdout

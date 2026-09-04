@@ -44,7 +44,6 @@ const DEFAULT_MAX_BUFFER = 32 * 1024 * 1024
 function baseEnv(extra?: Readonly<Record<string, string>>): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    ...extra,
     GIT_TERMINAL_PROMPT: '0',
     GIT_ASKPASS: '',
     GIT_OPTIONAL_LOCKS: '0',
@@ -52,6 +51,9 @@ function baseEnv(extra?: Readonly<Record<string, string>>): NodeJS.ProcessEnv {
     // A repository-local hook must not run on this plugin's behalf.
     GIT_CONFIG_NOSYSTEM: '1',
     LC_ALL: 'C',
+    // Per-call overrides come last; push needs to re-enable the system config
+    // (and therefore the system Git Credential Manager) for authentication.
+    ...extra,
   }
 }
 
