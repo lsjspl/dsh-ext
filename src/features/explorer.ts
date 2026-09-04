@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { spawn, exec } from 'node:child_process'
-import { createReadStream } from 'node:fs'
+import { createReadStream, existsSync } from 'node:fs'
 import { readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep, dirname, basename, extname } from 'node:path'
 import { promisify } from 'node:util'
@@ -922,9 +922,17 @@ function workspaceRoots(ctx: Context): { id: string; title: string; root: string
 function sessionRoot(ctx: Context, sessionId: string): string | undefined {
   // `sessions.get` answers only for a LIVE session, which is exactly the case
   // that matters: the explorer is asking on behalf of the session on screen.
-  const session = ctx.get('sessions')?.get(sessionId as never)
-  const cwd = (session as { meta?: { cwd?: unknown } } | undefined)?.meta?.cwd
-  return typeof cwd === 'string' && cwd.length > 0 ? cwd : undefined
+  const session = ctx.get('sessions')?.get(sessionId as never) as any
+  if (!session) return undefined
+  const cwd = session?.meta?.cwd ?? session?.cwd ?? session?.workspacePath
+  if (typeof cwd === 'string' && cwd.length > 0) return cwd
+  const wsId = session?.meta?.workspaceId ?? session?.workspaceId
+  if (typeof wsId === 'string' && wsId.length > 0) {
+    const roots = workspaceRoots(ctx)
+    const found = roots.find(r => r.id === wsId)
+    if (found) return found.root
+  }
+  return undefined
 }
 
 /**
@@ -995,6 +1003,14 @@ async function sessionRootFromHeader(ctx: Context, sessionId: string, signal: Ab
  * the current one — and a changes list belonging to a different repository looks
  * authoritative while being wrong.
  */
+function normPath(p: string): string {
+  const resolved = resolve(p)
+  if (process.platform === 'win32') {
+    return resolved.toLowerCase().replace(/\\/g, '/')
+  }
+  return resolved.replace(/\\/g, '/')
+}
+
 export async function resolveRoot(
   ctx: Context,
   requestedId: string | null,
@@ -1003,26 +1019,33 @@ export async function resolveRoot(
 ): Promise<{ id: string; root: string }> {
   const roots = workspaceRoots(ctx)
   const first = roots[0]
-  if (first === undefined) throw new ApiError(409, 'this deployment has no workspace to explore')
 
+  // 1. Explicitly requested workspace ID or path takes priority
+  if (requestedId !== null && requestedId !== undefined && requestedId.length > 0) {
+    const targetNorm = normPath(requestedId)
+    const found = roots.find(row => row.id === requestedId || normPath(row.root) === targetNorm)
+    if (found !== undefined) {
+      return { id: found.id, root: found.root }
+    }
+    // If it is an existing directory path on disk (e.g. worktree not yet in registry):
+    if (existsSync(requestedId)) {
+      return { id: requestedId, root: resolve(requestedId) }
+    }
+  }
+
+  // 2. Fall back to session's own root
   if (sessionId !== undefined && sessionId !== null && sessionId.length > 0) {
     const root = sessionRoot(ctx, sessionId)
       ?? workspaceRootBySession(ctx, sessionId)
       ?? await sessionRootFromHeader(ctx, sessionId, signal)
     if (root !== undefined) {
-      // Report the registry's id for it when there is one, so the client can pin
-      // the same workspace on later calls.
-      const known = roots.find(row => row.root === root)
+      const rootNorm = normPath(root)
+      const known = roots.find(row => row.root === root || normPath(row.root) === rootNorm)
       return { id: known?.id ?? root, root }
     }
   }
 
-  if (requestedId !== null && requestedId.length > 0) {
-    const found = roots.find(row => row.id === requestedId || row.root === requestedId)
-    if (found === undefined) throw new ApiError(404, 'no such workspace')
-    return { id: found.id, root: found.root }
-  }
-
+  if (first === undefined) throw new ApiError(409, 'this deployment has no workspace to explore')
   return { id: first.id, root: first.root }
 }
 

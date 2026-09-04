@@ -463,12 +463,17 @@ export const en = {
   'git.noOtherWorktrees': 'No other worktrees',
   'git.boundToWorktreeNotice': 'Currently in a linked worktree. Branch is fixed to [{branch}]. To switch branches, select the Main Workspace.',
   'git.checkedOutInWorktree': 'In use by worktree',
-  'git.createWorktreeAction': '+ Create Worktree...',
-  'git.createBranchAction': '+ Create Branch...',
+  'git.createWorktreeAction': 'Create Worktree...',
+  'git.createBranchAction': 'Create Branch...',
   'git.autoRegisterDsh': 'Auto-register as DeepSeek workspace (Recommended)',
   'git.checkoutAfterCreate': 'Checkout branch after creation',
   'git.useExistingBranch': 'Use existing branch',
   'git.createNewBranch': 'Create new branch',
+  'git.worktreePrefix': 'Worktree:',
+  'git.worktreeOfPrefix': '{name} Worktree:',
+  'git.worktreeTag': '{name} Worktree',
+  'git.mainWorkspacePrefix': 'Main:',
+  'git.branchPrefix': 'Branch:',
 } as const
 
 export type LocaleKey = keyof typeof en
@@ -912,12 +917,17 @@ export const zh: Record<LocaleKey, string> = {
   'git.noOtherWorktrees': '暂无其他 Worktree',
   'git.boundToWorktreeNotice': '当前处于关联 Worktree 中，分支已固定为【{branch}】。Git 规则规定 Worktree 独占其分支，如需自由切换分支，请选择主工作区。',
   'git.checkedOutInWorktree': '已在 Worktree 中检出',
-  'git.createWorktreeAction': '+ 创建 Worktree...',
-  'git.createBranchAction': '+ 创建分支...',
+  'git.createWorktreeAction': '创建 Worktree...',
+  'git.createBranchAction': '创建分支...',
   'git.autoRegisterDsh': '自动注册为客户端工作区 (推荐)',
   'git.checkoutAfterCreate': '创建后立即切换到该分支',
   'git.useExistingBranch': '使用已有分支',
   'git.createNewBranch': '创建新分支',
+  'git.worktreePrefix': 'Worktree:',
+  'git.worktreeOfPrefix': '{name} 的 Worktree:',
+  'git.worktreeTag': '{name} 的 Worktree',
+  'git.mainWorkspacePrefix': '主工作区:',
+  'git.branchPrefix': '分支:',
 }
 
 /** Both dictionaries, in the shape `ctx.locale.register` takes. */

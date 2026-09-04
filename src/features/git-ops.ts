@@ -35,8 +35,7 @@ function asRecord(val: unknown): Record<string, unknown> {
 export function normalizeGitPath(p: string): string {
   const resolved = resolve(p)
   if (process.platform === 'win32' && resolved.length > 0 && /^[A-Za-z]:[\\/]/.test(resolved)) {
-    const drive = resolved[0]?.toLowerCase() ?? ''
-    return drive + resolved.slice(1).replace(/\\/g, '/')
+    return resolved.toLowerCase().replace(/\\/g, '/')
   }
   return resolved.replace(/\\/g, '/')
 }
@@ -204,6 +203,7 @@ async function listBranches(
 async function listWorktrees(
   ctx: Context,
   root: string,
+  currentWorkspaceDir?: string,
   signal?: AbortSignal,
 ): Promise<GitWorktreesResult> {
   const result = await git(['worktree', 'list', '--porcelain'], { cwd: root, signal })
@@ -213,7 +213,7 @@ async function listWorktrees(
 
   const dshWorkspaces = ctx.get('workspaceRegistry')?.list() ?? []
   const knownRoots = new Set(dshWorkspaces.map(ws => normalizeGitPath(ws.path)))
-  const normalizedCurrentRoot = normalizeGitPath(root)
+  const normalizedCurrentRoot = normalizeGitPath(currentWorkspaceDir || root)
 
   const entries = result.stdout.split(/\r?\n\r?\n/).filter(block => block.trim().length > 0)
   const worktrees: GitWorktreeInfo[] = []
@@ -721,7 +721,7 @@ export function mountGitOps(
     const repo = await repositoryRoot(root, controller.signal)
     if (!repo) throw new ApiError(400, 'Current workspace is not a git repository')
 
-    return await listWorktrees(ctx, repo, controller.signal)
+    return await listWorktrees(ctx, repo, root, controller.signal)
   }
 
   const handleWorktreeAdd: ApiHandler = async ({ body, req }) => {
@@ -747,7 +747,7 @@ export function mountGitOps(
 
     // Verify mutual exclusion: ensure branch is not checked out in another worktree
     if (branch && !newBranch) {
-      const wtList = await listWorktrees(ctx, repo, controller.signal)
+      const wtList = await listWorktrees(ctx, repo, root, controller.signal)
       const found = wtList.worktrees.find(w => w.branch === branch)
       if (found) {
         throw new ApiError(409, `分支 [${branch}] 已在工作区 [${found.path}] 中检出。每个分支同时只能存在于一个 Worktree 中。`)

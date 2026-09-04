@@ -152,7 +152,7 @@ export function SidePanel(props: SidePanelProps) {
         background: 'var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, #1c1c1f))',
         borderLeft: props.side === 'right' ? `1px solid ${token.border}` : 'none',
         borderRight: props.side === 'left' ? `1px solid ${token.border}` : 'none',
-        boxShadow: props.side === 'right' ? '-4px 0 16px rgba(0, 0, 0, 0.1)' : '4px 0 16px rgba(0, 0, 0, 0.1)',
+        boxShadow: props.side === 'right' ? 'none' : '4px 0 16px rgba(0, 0, 0, 0.1)',
         overflow: 'hidden',
         pointerEvents: 'auto',
       }}

@@ -32,7 +32,7 @@ import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, ShieldCheckIcon, VscodeIc
 import { Toast, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { callApi } from './api.ts'
 import { useResource } from './use-resource.ts'
-import { ComposerGitControls, HeroGitControls } from './ComposerGitBar.tsx'
+import { ComposerGitControls } from './ComposerGitBar.tsx'
 import { setPanelOpen, setPanelSession, usePanelOpen } from './panel-state.ts'
 import { useActiveWorkspace, type WorkspacesHook } from './use-workspace.ts'
 import { mutateClientConfig, readClientConfig, useClientConfig } from './use-client-config.ts'
@@ -123,7 +123,6 @@ export function apply(ctx: Context): void {
   registerSidePanel(ctx)
   registerExplorerToggles(ctx)
   registerOpenEditorLauncher(ctx)
-  registerGitBranchComposer(ctx)
   registerRecycleBin(ctx)
   installFileLinkInterceptor(ctx)
 }
@@ -417,6 +416,7 @@ function registerBalanceBadge(ctx: Context): void {
         const config = useClientConfig()
         const [cardEl, setCardEl] = useState<HTMLElement | null>(null)
         const anchorRef = useRef<HTMLSpanElement | null>(null)
+        const activeWorkspace = useActiveWorkspace()
 
         // Reactively observe active sessionId
         const currentSessionId = useSyncExternalStore(
@@ -535,7 +535,7 @@ function registerBalanceBadge(ctx: Context): void {
                 }}
               >
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, pointerEvents: 'auto' }}>
-                  {showGit && <ComposerGitControls sessionId={effectiveGitSessionId} />}
+                  {showGit && <ComposerGitControls workspaceRoot={activeWorkspace} sessionId={effectiveGitSessionId} />}
                 </div>
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, pointerEvents: 'auto' }}>
                   {showBalance && <BalanceBadge cardEl={cardEl} inline />}
@@ -1033,24 +1033,6 @@ function registerOpenEditorLauncher(ctx: Context): void {
 }
 
 
-/**
- * Git Branch & Worktree selector in composer tool row (`conversation.input.left`).
- * Always visible on new-session blank screen and during conversations.
- * Also portals a companion chip into heroWorkspaceRow on the new-session screen!
- */
-function registerGitBranchComposer(ctx: Context): void {
-  trySlot('git branch composer', () => {
-    ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
-      name: 'conversation.input.left',
-      id: 'dsh-ext-git-branch-composer',
-      order: 10,
-      registrant: 'dsh-ext',
-    }, function DevToolGitBranchComposer() {
-      // Unified in composer-top-bar (beside balance badge); no duplicate row
-      return null
-    }))
-  })
-}
 
 /**
  * The sidebar-foot recycle-bin entry.

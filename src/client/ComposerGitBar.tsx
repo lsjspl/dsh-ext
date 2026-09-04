@@ -21,7 +21,7 @@ export class GitErrorBoundary extends Component<{ children: ReactNode }, { hasEr
 }
 import { callApi } from './api.ts'
 import { getClientContext } from './index.tsx'
-import { useActiveWorkspace } from './use-workspace.ts'
+import { useActiveWorkspace, setActiveWorkspaceRoot } from './use-workspace.ts'
 import { useClientConfig } from './use-client-config.ts'
 import type {
   ExplorerStatus,
@@ -79,8 +79,9 @@ const badgeChipStyle: React.CSSProperties = {
 const popoverStyle: React.CSSProperties = {
   position: 'absolute',
   top: 'calc(100% + 6px)',
-  minWidth: 260,
-  maxWidth: 380,
+  minWidth: 320,
+  maxWidth: 480,
+  width: 'max-content',
   background: 'var(--dsw-alias-bg-layer-1, #1e1e1e)',
   border: `1px solid ${token.border}`,
   borderRadius: 8,
@@ -289,9 +290,13 @@ export function CreateWorktreeModal(props: {
   const [error, setError] = useState<string | null>(null)
 
   const repoName = useMemo(() => {
+    const mainWt = props.worktrees.find(w => w.isMain)
+    if (mainWt?.path) {
+      return mainWt.path.split(/[\\/]/).filter(Boolean).pop() || 'repo'
+    }
     const r = props.workspaceRoot || ''
     return r.split(/[\\/]/).filter(Boolean).pop() || 'repo'
-  }, [props.workspaceRoot])
+  }, [props.workspaceRoot, props.worktrees])
 
   // Branches that are NOT currently checked out in any worktree
   const availableBranches = useMemo(() => {
@@ -529,12 +534,18 @@ export function ComposerGitControlsInner(props: {
   const [worktreeOpen, setWorktreeOpen] = useState(false)
   const [branchOpen, setBranchOpen] = useState(false)
   const [branchSearch, setBranchSearch] = useState('')
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null)
   const [toastText, setToastText] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   // Modals
   const [createBranchOpen, setCreateBranchOpen] = useState(false)
   const [createWorktreeOpen, setCreateWorktreeOpen] = useState(false)
+
+  // Reset selected branch when active workspace changes
+  useEffect(() => {
+    setSelectedBranch(null)
+  }, [workspaceRoot])
 
   // Container refs for click-outside dismissal
   const worktreeRef = useRef<HTMLDivElement | null>(null)
@@ -595,22 +606,46 @@ export function ComposerGitControlsInner(props: {
     }
   }, [isLocked])
 
+  // Clear optimistic branch once backend resource confirms the branch
+  useEffect(() => {
+    if (selectedBranch && (branches.data?.current === selectedBranch || status.data?.branch === selectedBranch)) {
+      setSelectedBranch(null)
+    }
+  }, [selectedBranch, branches.data?.current, status.data?.branch])
+
   // Early returns ONLY AFTER ALL HOOKS HAVE BEEN CALLED!
   if (config?.git.enabled !== true) return null
   if (!status.data?.isRepository) return null
 
-  const currentBranch = (!isHero && binding.data?.binding?.branch) || branches.data?.current || status.data.branch || 'main'
+  const allWorktrees = worktrees.data?.worktrees ?? []
+  const normWorkspace = (status.data?.root || workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  const currentWt = allWorktrees.find(w => w.isCurrent)
+    || allWorktrees.find(w => w.path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === normWorkspace)
+  const isMainWorktree = currentWt ? currentWt.isMain : (allWorktrees[0]?.path ? normWorkspace === allWorktrees[0].path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : true)
+
+  const isWorktreeCurrent = (wt: GitWorktreeInfo) => {
+    if (wt.isCurrent) return true
+    if (currentWt && wt.path === currentWt.path) return true
+    const p = wt.path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    return p === normWorkspace
+  }
+
+  const currentBranch = selectedBranch
+    || (isMainWorktree
+      ? (branches.data?.current || status.data.branch || currentWt?.branch)
+      : (currentWt?.branch || branches.data?.current || status.data.branch))
+    || (!isHero && binding.data?.binding?.branch)
+    || 'main'
   const ahead = status.data.ahead ?? 0
   const behind = status.data.behind ?? 0
 
-  const allWorktrees = worktrees.data?.worktrees ?? []
-  const currentWt = allWorktrees.find(w => w.isCurrent)
-  const isMainWorktree = currentWt ? currentWt.isMain : true
+  const mainWt = allWorktrees.find(w => w.isMain)
+  const mainRepoName = (mainWt?.path || '').split(/[\\/]/).filter(Boolean).pop()
+    || (status.data.root || workspaceRoot || '').split(/[\\/]/).filter(Boolean).pop()
+    || 'repo'
 
-  const repoName = (status.data.root || workspaceRoot || '').split(/[\\/]/).filter(Boolean).pop() || 'repo'
-  const worktreeDisplayName = currentWt
-    ? (currentWt.isMain ? repoName : currentWt.path.split(/[\\/]/).filter(Boolean).pop() || currentWt.branch || 'worktree')
-    : repoName
+  const currentWtName = currentWt?.path.split(/[\\/]/).filter(Boolean).pop() || currentWt?.branch || mainRepoName
+  const worktreeDisplayName = isMainWorktree ? mainRepoName : currentWtName
 
   // Set of branches currently checked out in linked worktrees
   const branchesInWorktrees = new Map<string, GitWorktreeInfo>()
@@ -626,37 +661,64 @@ export function ComposerGitControlsInner(props: {
     setBusy(true)
     try {
       let wsId = wt.workspaceId
+      const workspaces = getClientContext()?.get('workspaces') as any
+      const sessions = getClientContext()?.get('sessions') as any
+
       if (!wsId) {
-        // Register it dynamically if not registered yet
-        const regRes = await callApi<{ ok: boolean; workspaceId: string }>('/explorer/git/register-workspace', {
-          body: { path: wt.path },
-        })
-        if (regRes.ok) wsId = regRes.value.workspaceId
-      }
-      if (wsId) {
-        const workspaces = getClientContext()?.get('workspaces') as { connectWorkspace?(id: string): Promise<void> } | undefined
-        if (workspaces?.connectWorkspace) {
-          await workspaces.connectWorkspace(wsId)
-          setWorktreeOpen(false)
-          setToastText(`已切换工作区: ${wt.path}`)
-          return
+        // Try native client create first so client snapshot has it immediately
+        if (workspaces?.create) {
+          try {
+            const view = await workspaces.create({ path: wt.path })
+            if (view?.workspaceId) wsId = view.workspaceId
+          } catch (createErr) {
+            console.warn('[dsh-ext] workspaces.create failed, falling back to server API:', createErr)
+          }
+        }
+        if (!wsId) {
+          // Register it dynamically via server API if not registered yet
+          const regRes = await callApi<{ ok: boolean; workspaceId?: string }>('/explorer/git/register-workspace', {
+            body: { path: wt.path },
+          })
+          if (regRes.ok) {
+            wsId = regRes.value.workspaceId
+          }
         }
       }
+
+      // 1. Immediately update active workspace root locally
+      setActiveWorkspaceRoot(wt.path)
+
+      // 2. Connect the client-side workspace. connectWorkspace returns the
+      //    resulting session id directly; that id must be passed to sessions.open
+      //    for the UI to actually navigate to the newly selected worktree.
+      let childId: string | undefined
+      if (wsId && workspaces?.connectWorkspace) {
+        childId = await workspaces.connectWorkspace(wsId)
+      }
+
+      // 3. Navigate the session to the new workspace so user's first message lands there
+      if (childId && sessions?.open) {
+        sessions.open(childId)
+      }
+
+      // 4. Force reload resources for the new workspace
+      status.reload()
+      worktrees.reload()
+      branches.reload()
+      binding.reload?.()
+
       setToastText(`已切换工作区: ${wt.path}`)
       setWorktreeOpen(false)
     } catch (err: unknown) {
-      setToastText(`切换工作区失败: ${err instanceof Error ? err.message : String(err)}`)
+      setToastText(`切换工作区失败: ${err instanceof Error ? err.message : String(err)}` )
     } finally {
       setBusy(false)
     }
   }
 
-  // Checkout Branch action in main worktree (Only allowed in new session)
+  // Switch branch action
   const handleCheckoutBranch = async (targetBranch: string) => {
-    if (targetBranch === currentBranch || isLocked) {
-      setBranchOpen(false)
-      return
-    }
+    if (isLocked) return
     setBusy(true)
     try {
       const res = await callApi<{ ok: boolean; message?: string }>('/explorer/git/checkout', {
@@ -668,10 +730,12 @@ export function ComposerGitControlsInner(props: {
         },
       })
       if (res.ok) {
+        setSelectedBranch(targetBranch)
         setToastText(t('git.checkoutSuccess', { branch: targetBranch }))
         status.reload()
-        binding.reload?.()
         branches.reload()
+        worktrees.reload()
+        binding.reload?.()
         setBranchOpen(false)
         props.onBranchSwitched?.(targetBranch)
       } else {
@@ -703,7 +767,7 @@ export function ComposerGitControlsInner(props: {
           {isLocked ? (
             <div
               role="status"
-              title={`工作区: ${worktreeDisplayName} (当前会话已锁定，不可切换)`}
+              title={`${isMainWorktree ? t('git.mainWorkspacePrefix') : t('git.worktreeOfPrefix', { name: mainRepoName })} ${worktreeDisplayName} (当前会话已锁定，不可切换)`}
               style={{
                 ...(props.variant === 'hero' ? heroChipStyle : badgeChipStyle),
                 cursor: 'not-allowed',
@@ -712,14 +776,12 @@ export function ComposerGitControlsInner(props: {
               }}
             >
               <FolderIcon size={13} style={{ color: 'inherit' }} />
+              <span style={{ fontSize: 11, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
+                {isMainWorktree ? t('git.mainWorkspacePrefix') : t('git.worktreeOfPrefix', { name: mainRepoName })}
+              </span>
               <span style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {worktreeDisplayName}
               </span>
-              {isMainWorktree && (
-                <span style={{ fontSize: 10, opacity: 0.75, padding: '1px 4px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-3, rgba(125, 125, 125, 0.2))' }}>
-                  {t('git.worktreeMain')}
-                </span>
-              )}
               <LockIcon size={11} style={{ opacity: 0.65, marginLeft: 1 }} />
             </div>
           ) : (
@@ -729,7 +791,7 @@ export function ComposerGitControlsInner(props: {
                 setWorktreeOpen(v => !v)
                 setBranchOpen(false)
               }}
-              title={`工作区: ${worktreeDisplayName} (${isMainWorktree ? '主目录' : 'Worktree'})`}
+              title={`${isMainWorktree ? t('git.mainWorkspacePrefix') : t('git.worktreeOfPrefix', { name: mainRepoName })} ${worktreeDisplayName}`}
               style={{
                 ...(props.variant === 'hero' ? heroChipStyle : badgeChipStyle),
                 cursor: 'pointer',
@@ -746,14 +808,12 @@ export function ComposerGitControlsInner(props: {
               }}
             >
               <FolderIcon size={13} style={{ color: 'inherit' }} />
+              <span style={{ fontSize: 11, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
+                {isMainWorktree ? t('git.mainWorkspacePrefix') : t('git.worktreeOfPrefix', { name: mainRepoName })}
+              </span>
               <span style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {worktreeDisplayName}
               </span>
-              {isMainWorktree && (
-                <span style={{ fontSize: 10, opacity: 0.75, padding: '1px 4px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-3, rgba(125, 125, 125, 0.2))' }}>
-                  {t('git.worktreeMain')}
-                </span>
-              )}
               <ChevronIcon size={9} open={worktreeOpen} />
             </button>
           )}
@@ -767,62 +827,70 @@ export function ComposerGitControlsInner(props: {
 
               <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {/* Main Worktree */}
-                {allWorktrees.filter(w => w.isMain).map(wt => (
-                  <button
-                    key={wt.path}
-                    type="button"
-                    disabled={busy || wt.isCurrent}
-                    onClick={() => handleSwitchWorkspace(wt)}
-                    style={{
-                      ...menuItemStyle,
-                      background: wt.isCurrent ? 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.16))' : 'transparent',
-                      fontWeight: wt.isCurrent ? 600 : 400,
-                    }}
-                    onMouseEnter={e => { if (!wt.isCurrent) e.currentTarget.style.background = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))' }}
-                    onMouseLeave={e => { if (!wt.isCurrent) e.currentTarget.style.background = 'transparent' }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                      <FolderIcon size={13} style={{ color: 'inherit', flex: '0 0 auto' }} />
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {repoName}
-                      </span>
-                      <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-3, rgba(125, 125, 125, 0.2))', color: token.textMuted }}>
-                        {t('git.mainWorkspace')}
-                      </span>
-                    </div>
-                    {wt.isCurrent && <CheckIcon size={13} style={{ color: 'var(--dsw-alias-state-business-primary, #3b82f6)' }} />}
-                  </button>
-                ))}
-
-                {/* Linked Worktrees */}
-                {allWorktrees.filter(w => !w.isMain).map(wt => {
-                  const name = wt.path.split(/[\\/]/).filter(Boolean).pop() || 'worktree'
+                {allWorktrees.filter(w => w.isMain).map(wt => {
+                  const mainName = wt.path.split(/[\\/]/).filter(Boolean).pop() || mainRepoName
+                  const isCur = isWorktreeCurrent(wt)
                   return (
                     <button
                       key={wt.path}
                       type="button"
-                      disabled={busy || wt.isCurrent}
+                      disabled={busy || isCur}
                       onClick={() => handleSwitchWorkspace(wt)}
                       style={{
                         ...menuItemStyle,
-                        background: wt.isCurrent ? 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.16))' : 'transparent',
-                        fontWeight: wt.isCurrent ? 600 : 400,
+                        background: isCur ? 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.16))' : 'transparent',
+                        fontWeight: isCur ? 600 : 400,
                       }}
-                      onMouseEnter={e => { if (!wt.isCurrent) e.currentTarget.style.background = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))' }}
-                      onMouseLeave={e => { if (!wt.isCurrent) e.currentTarget.style.background = 'transparent' }}
+                      onMouseEnter={e => { if (!isCur) e.currentTarget.style.background = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))' }}
+                      onMouseLeave={e => { if (!isCur) e.currentTarget.style.background = 'transparent' }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: '1 1 auto' }}>
+                        <FolderIcon size={13} style={{ color: 'inherit', flex: '0 0 auto' }} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {mainName}
+                        </span>
+                        <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-3, rgba(125, 125, 125, 0.2))', color: token.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                          {t('git.mainWorkspace')}
+                        </span>
+                      </div>
+                      {isCur && <CheckIcon size={13} style={{ color: 'var(--dsw-alias-state-business-primary, #3b82f6)', flex: '0 0 auto', marginLeft: 8 }} />}
+                    </button>
+                  )
+                })}
+
+                {/* Linked Worktrees */}
+                {allWorktrees.filter(w => !w.isMain).map(wt => {
+                  const name = wt.path.split(/[\\/]/).filter(Boolean).pop() || 'worktree'
+                  const isCur = isWorktreeCurrent(wt)
+                  return (
+                    <button
+                      key={wt.path}
+                      type="button"
+                      disabled={busy || isCur}
+                      onClick={() => handleSwitchWorkspace(wt)}
+                      style={{
+                        ...menuItemStyle,
+                        background: isCur ? 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.16))' : 'transparent',
+                        fontWeight: isCur ? 600 : 400,
+                      }}
+                      onMouseEnter={e => { if (!isCur) e.currentTarget.style.background = 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))' }}
+                      onMouseLeave={e => { if (!isCur) e.currentTarget.style.background = 'transparent' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: '1 1 auto' }}>
                         <GitIcon size={13} style={{ color: 'var(--dsw-alias-state-business-primary, #3b82f6)', flex: '0 0 auto' }} />
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {name}
                         </span>
+                        <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-3, rgba(125, 125, 125, 0.2))', color: token.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                          {t('git.worktreeTag', { name: mainRepoName })}
+                        </span>
                         {wt.branch && (
-                          <span style={{ fontSize: 10, color: token.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <span style={{ fontSize: 10, color: token.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>
                             ({wt.branch})
                           </span>
                         )}
                       </div>
-                      {wt.isCurrent && <CheckIcon size={13} style={{ color: 'var(--dsw-alias-state-business-primary, #3b82f6)' }} />}
+                      {isCur && <CheckIcon size={13} style={{ color: 'var(--dsw-alias-state-business-primary, #3b82f6)', flex: '0 0 auto', marginLeft: 8 }} />}
                     </button>
                   )
                 })}
@@ -859,7 +927,7 @@ export function ComposerGitControlsInner(props: {
           {isLocked ? (
             <div
               role="status"
-              title={`Git 分支: ${currentBranch} (当前会话已锁定，不可切换)`}
+              title={`${t('git.branchPrefix')} ${currentBranch} (当前会话已锁定，不可切换)`}
               style={{
                 ...(props.variant === 'hero' ? heroChipStyle : badgeChipStyle),
                 cursor: 'not-allowed',
@@ -868,6 +936,9 @@ export function ComposerGitControlsInner(props: {
               }}
             >
               <GitIcon size={13} style={{ color: 'inherit' }} />
+              <span style={{ fontSize: 11, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
+                {t('git.branchPrefix')}
+              </span>
               <span style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {currentBranch}
               </span>
@@ -885,7 +956,7 @@ export function ComposerGitControlsInner(props: {
               title={
                 !isMainWorktree
                   ? `已绑定此 Worktree (${currentBranch})`
-                  : `${t('git.currentBranch')}: ${currentBranch}`
+                  : `${t('git.branchPrefix')} ${currentBranch}`
               }
               style={{
                 ...(props.variant === 'hero' ? heroChipStyle : badgeChipStyle),
@@ -903,6 +974,9 @@ export function ComposerGitControlsInner(props: {
               }}
             >
               <GitIcon size={13} style={{ color: 'inherit' }} />
+              <span style={{ fontSize: 11, color: token.textMuted, opacity: 0.85, marginRight: -1, userSelect: 'none', flexShrink: 0 }}>
+                {t('git.branchPrefix')}
+              </span>
               <span style={{ maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {currentBranch}
               </span>
@@ -1065,9 +1139,12 @@ export function ComposerGitControlsInner(props: {
         currentBranch={currentBranch}
         isLocked={isLocked}
         onBranchCreated={(newBranch) => {
+          setSelectedBranch(newBranch)
           setToastText(t('git.checkoutSuccess', { branch: newBranch }))
           branches.reload()
           status.reload()
+          worktrees.reload()
+          binding.reload?.()
           props.onBranchSwitched?.(newBranch)
         }}
       />
@@ -1080,14 +1157,25 @@ export function ComposerGitControlsInner(props: {
         localBranches={branches.data?.local ?? []}
         worktrees={allWorktrees}
         onWorktreeCreated={async (newPath, newBranch, wsId) => {
-          setToastText(`Worktree 创建成功: ${newPath}`)
+          setActiveWorkspaceRoot(newPath)
           worktrees.reload()
           branches.reload()
+          status.reload()
+          binding.reload?.()
           if (wsId) {
-            const workspaces = getClientContext()?.get('workspaces') as { connectWorkspace?(id: string): Promise<void> } | undefined
-            if (workspaces?.connectWorkspace) {
+            setToastText(`已创建并切换到 Worktree: ${newPath}`)
+            const workspaces = getClientContext()?.get('workspaces') as any
+            const sessions = getClientContext()?.get('sessions') as any
+            if (workspaces?.connectWorkspace && sessions?.open) {
+              const childId = await workspaces.connectWorkspace(wsId).catch(() => {})
+              if (childId) sessions.open(childId)
+            } else if (workspaces?.startSession) {
+              workspaces.startSession(wsId)
+            } else if (workspaces?.connectWorkspace) {
               await workspaces.connectWorkspace(wsId).catch(() => {})
             }
+          } else {
+            setToastText(`Worktree 创建成功: ${newPath}`)
           }
         }}
       />
@@ -1108,10 +1196,3 @@ export function ComposerGitControls(props: {
   )
 }
 
-/**
- * Portals git worktree and branch chips into the Hero workspace row
- * (the row with WorkspaceChip on the new-session blank screen).
- */
-export function HeroGitControls() {
-  return null
-}
