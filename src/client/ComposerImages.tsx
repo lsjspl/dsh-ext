@@ -117,21 +117,6 @@ export function ComposerImages(props: ComposerImagesProps) {
     if (!applyOrder(actions, input.imageIds, ids)) setNotice(t('images.busy'))
   }, [actions, input])
 
-  /** Keyboard reordering, so the feature is not mouse-only. */
-  const nudge = useCallback((id: DraftAttachmentId, delta: -1 | 1) => {
-    if (actions === undefined || input === undefined) return
-    const ids = [...input.imageIds]
-    const index = ids.indexOf(id)
-    const target = index + delta
-    if (index < 0 || target < 0 || target >= ids.length) return
-    const moved = ids[index]
-    const displaced = ids[target]
-    if (moved === undefined || displaced === undefined) return
-    ids[index] = displaced
-    ids[target] = moved
-    if (!applyOrder(actions, input.imageIds, ids)) setNotice(t('images.busy'))
-  }, [actions, input])
-
   const pick = useCallback(() => { fileInput.current?.click() }, [])
 
   /**
@@ -277,9 +262,9 @@ export function ComposerImages(props: ComposerImagesProps) {
         <div
           role="list"
           aria-label={t('images.rail')}
-          style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '6px 0 2px' }}
+          style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '6px var(--dsh-composer-side-clearance, 16px) 2px' }}
         >
-          {attachments.map((attachment, index) => {
+          {attachments.map((attachment) => {
             const isOver = over === attachment.id && dragging !== attachment.id
             return (
               <div
@@ -313,28 +298,6 @@ export function ComposerImages(props: ComposerImagesProps) {
                   draggable={false}
                   style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                 />
-
-                {reorderable && (
-                  // Keyboard equivalent of the drag. Visually quiet, but present
-                  // in the tab order: a reorder no one can reach by keyboard is
-                  // a reorder half the users do not have.
-                  <div style={{ position: 'absolute', left: 2, bottom: 2, display: 'flex', gap: 2 }}>
-                    <button
-                      type="button"
-                      aria-label={`Move ${attachment.file.name} earlier`}
-                      disabled={index === 0}
-                      onClick={() => { nudge(attachment.id, -1) }}
-                      style={nudgeStyle}
-                    >‹</button>
-                    <button
-                      type="button"
-                      aria-label={`Move ${attachment.file.name} later`}
-                      disabled={index === attachments.length - 1}
-                      onClick={() => { nudge(attachment.id, 1) }}
-                      style={nudgeStyle}
-                    >›</button>
-                  </div>
-                )}
 
                 <button
                   type="button"
@@ -393,16 +356,4 @@ export function ComposerImages(props: ComposerImagesProps) {
   )
 }
 
-const nudgeStyle = {
-  width: 16,
-  height: 16,
-  padding: 0,
-  fontSize: 11,
-  lineHeight: '14px',
-  borderRadius: 4,
-  border: 'none',
-  cursor: 'pointer',
-  color: '#fff',
-  background: 'rgba(0,0,0,0.55)',
-} as const
 

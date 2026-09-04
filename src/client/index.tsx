@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { RenderMessageImages } from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Declaration-merging imports: these bring `shell.overlay` into the SlotMap and
 // `modelDirectories` onto the context. Types only — neither is a runtime import,
 // so they add nothing to the bundle.
@@ -695,6 +695,7 @@ function registerUserEditBubbles(ctx: Context): void {
         node: { kind: string; data: { seq: number; time: number; content: readonly unknown[] } }
         sessionId: string
         useWorkspaces?: <T>(select: (state: { items: readonly { workspaceId: string; path: string }[] }) => T) => T
+        renderMessageImages?: RenderMessageImages
       }) {
         const config = useClientConfig()
         if (config?.checkpoints.enabled !== true) return null
@@ -706,6 +707,7 @@ function registerUserEditBubbles(ctx: Context): void {
             workspaces={workspaces}
             node={props.node.data}
             useWorkspaces={props.useWorkspaces}
+            renderMessageImages={props.renderMessageImages}
           />
         )
       }))

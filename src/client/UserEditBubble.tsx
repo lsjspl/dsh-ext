@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
+import type { RenderMessageImages } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { callApi } from './api.ts'
 import { CheckIcon, EditIcon } from './icons.tsx'
 import { Notice, buttonStyle, token } from './ui.tsx'
@@ -90,6 +91,8 @@ export function UserEditBubble(props: {
   useWorkspaces?: <T>(select: (state: { items: readonly { workspaceId: string; path: string }[] }) => T) => T
   /** The host's workspaces service, for the first-turn fresh-session fallback and the undo archive. */
   workspaces?: WorkspacesFace & { archiveSession?(sessionId: string): Promise<void> }
+  /** Host renderer for durable message images; passed by the chat node owner. */
+  renderMessageImages?: RenderMessageImages
 }) {
   const t = useT()
   const [editing, setEditing] = useState(false)
@@ -98,6 +101,10 @@ export function UserEditBubble(props: {
   const [error, setError] = useState<string | undefined>(undefined)
   const [copied, setCopied] = useState(false)
   const text = userTextOf(props.node.content)
+  const images = props.node.content
+    .filter((block): block is { type: 'image'; attachment: unknown } =>
+      (block as { type?: unknown } | null)?.type === 'image')
+    .map(block => ({ attachment: block.attachment })) as Parameters<RenderMessageImages>[0]['images']
   const workspaceItems = props.useWorkspaces?.(state => state.items)
     ?? props.workspaces?.list?.getSnapshot?.()?.items
 
@@ -281,6 +288,7 @@ export function UserEditBubble(props: {
         .__dsh_user_row__ [data-dsh-part="user-bubble-actions"] { opacity: 0; transition: opacity 120ms ease; }
         .__dsh_user_row__:hover [data-dsh-part="user-bubble-actions"] { opacity: 1; }
       `}</style>
+      {images.length > 0 && props.renderMessageImages !== undefined && props.renderMessageImages({ images, align: 'end' })}
       {text.length > 0 && (
         <div
           style={{
