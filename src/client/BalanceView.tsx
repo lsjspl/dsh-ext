@@ -41,7 +41,7 @@ export function isPeakNow(windows: readonly string[], weekdaysOnly: boolean, now
 const HURT_CLASS = 'dsh-ext-hp-hit'
 const DROP_CLASS = 'dsh-ext-hp-drop'
 let badgeStylesInjected = false
-function injectBadgeStyles(): void {
+export function injectBadgeStyles(): void {
   if (badgeStylesInjected || typeof document === 'undefined') return
   badgeStylesInjected = true
   const style = document.createElement('style')
@@ -178,13 +178,25 @@ function injectBadgeStyles(): void {
   letter-spacing: -0.4px;
 }
 
+/*
+ * The composer's absolute top bar (worktree/git chips, balance chip) floats in
+ * the card's top padding. Reserve that space on the card itself so the
+ * attachment rail / input never slide underneath it, and remove the old
+ * in-scroll padding that used to create the extra blank gap above the textarea.
+ */
+[data-composer-card][data-has-balance-badge],
+[data-composer-card][data-has-git-controls] {
+  padding-top: 36px !important;
+  gap: 6px !important;
+}
+
 [data-composer-card][data-has-balance-badge] [data-input-scroll] {
-  padding-top: 32px !important;
+  padding-top: 0 !important;
   padding-right: 130px !important;
 }
 
 [data-composer-card][data-has-git-controls] [data-input-scroll] {
-  padding-top: 32px !important;
+  padding-top: 0 !important;
 }
 `
   document.head.appendChild(style)

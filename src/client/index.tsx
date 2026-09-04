@@ -13,7 +13,16 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type { ModelSelectInjected } from '@deepseek-ai/dsh-client-ui-model-selection/client'
 // Declares `ctx.inputTriggers`, the roster the slash menu renders its groups from.
-import type { InputTriggerServiceContract } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+import type {
+  CandidateRequest,
+  ClientSessionContext,
+  InputTriggerCandidate,
+  InputTriggerPick,
+  InputTriggerServiceContract,
+  PickOutcome,
+} from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+// Declares `ctx.commandUi` on the Cordis context through the commands client.
+import type { CommandUiRuntime } from '@deepseek-ai/dsh-client-ui-commands/client'
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import { SettingsPage } from './SettingsPage.tsx'
@@ -24,7 +33,7 @@ import type { WorkspacesFace } from './rewind.ts'
 import { ComposerImages } from './ComposerImages.tsx'
 import { SidePanel } from './SidePanel.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
-import { BalanceBadge } from './BalanceView.tsx'
+import { BalanceBadge, injectBadgeStyles } from './BalanceView.tsx'
 import { hasImagePicker, openImagePicker, subscribeImagePicker } from './picker-channel.ts'
 import { DICTS, LOCALE_NS } from './locales.ts'
 import { provideLocale, translate, useT } from './use-locale.ts'
@@ -112,6 +121,7 @@ export function apply(ctx: Context): void {
   })
 
   registerComposerImages(ctx)
+  registerPlusAttachEntry(ctx)
   registerToolsGroup(ctx)
   // Feature 2 declares the effort ladders server-side; the model seat below
   // renders the row that exposes them.
@@ -198,9 +208,8 @@ function registerComposerImages(ctx: Context): void {
  * The attach-file button, in the composer tool row beside the `+` launcher.
  *
  * One click opens the OS file dialog — no menu, no popup. The `+` launcher's own
- * menu is not used for this: its only extension seam (`commandUi.register`)
- * offers a single UI kind, `popupSelect`, so any row added there necessarily
- * opens a second layer before anything happens.
+ * first-level menu is handled separately by `registerPlusAttachEntry`; this
+ * button is the always-visible one-click shortcut beside it.
  *
  * This deliberately does NOT browse the workspace: `@` already inserts workspace
  * file references, and a second browser for the same files would be a worse
@@ -244,23 +253,78 @@ function registerImageTrigger(ctx: Context): void {
   })
 }
 
+type CommandUiPatch = {
+  candidates: (session: ClientSessionContext, req: CandidateRequest) => Promise<readonly InputTriggerCandidate[]>
+  dispatch: (pick: InputTriggerPick) => PickOutcome
+}
+
+/** Opaque marker carried by the synthetic plus-menu attach row. */
+const PLUS_ATTACH_VALUE = 'dsh-ext:plus-attach'
+
+/**
+ * Put a real "Attach a file" row into the `+` launcher's first-level menu.
+ *
+ * The `+` button is hard-wired by ui-conversation to open only the `/` command
+ * source (`inputTriggers.toggleSource('command', hit)`), and the public command
+ * contribution API (`commandUi.register`) only supports a `popupSelect` kind —
+ * which would add a second layer before the file dialog opens.
+ *
+ * To get the row at the first level with a direct action, we wrap the command
+ * source's private candidate/dispatch methods on the running CommandUiRuntime
+ * and add one synthetic candidate carrying an opaque `value`. The row still goes
+ * through the ordinary trigger menu: keyboard arbitration, mouse pick, and the
+ * shared close path all behave exactly like a native command row.
+ *
+ * This is deliberately keyed by `value` rather than by the displayed name, so
+ * the menu can show the localized `添加附件` / `Attach a file` label without
+ * making that text part of the command/token grammar.
+ */
+function registerPlusAttachEntry(ctx: Context): void {
+  trySlot('plus menu attach entry', () => {
+    ctx.inject(['commandUi'], (scoped: Context) => {
+      const commandUi = scoped.commandUi as CommandUiRuntime as unknown as CommandUiPatch
+      const originalCandidates = commandUi.candidates.bind(commandUi)
+      const originalDispatch = commandUi.dispatch.bind(commandUi)
+
+      commandUi.candidates = async (session, req) => {
+        const items = await originalCandidates(session, req)
+        const config = readClientConfig()
+        if (config?.imageComposer.enabled !== true || !config.imageComposer.pickerButton) return items
+        if (!hasImagePicker()) return items
+
+        const label = translate('files.attach')
+        const hint = translate('files.attachHint')
+        const query = req.query.trim().toLowerCase()
+        const matches = query.length === 0
+          || label.toLowerCase().includes(query)
+          || hint.toLowerCase().includes(query)
+          || 'file'.startsWith(query)
+        if (!matches) return items
+
+        return [{ name: label, description: hint, value: PLUS_ATTACH_VALUE }, ...items]
+      }
+
+      commandUi.dispatch = (pick) => {
+        if (pick.candidate.value === PLUS_ATTACH_VALUE) {
+          openImagePicker()
+          return 'handled'
+        }
+        return originalDispatch(pick)
+      }
+    })
+  })
+}
+
 /**
  * A `工具` group in the slash menu, above the shipped `命令` group.
  *
- * ## Why this is the `/` menu and not the `+` menu
+ * ## Why the typed `/` menu is still used for the Tools group
  *
- * The `+` button cannot host it. Its handler calls
- * `inputTriggers.toggleSource('command', hit)`, and `toggleSource` filters the
- * roster to `sources(trigger).find(item => item.name === source)` — one source,
- * selected by that literal name. Every other registered source is dropped
- * before the menu is seeded, whatever its `order`. Registering a second source
- * called `command` is not an escape either: the roster throws on a duplicate
- * trigger/name pair, which would take the shipped command menu down with it.
- *
- * The typed `/` path is different: it seeds from the FULL roster
- * (`roster.sources(hit.trigger)` with no name filter), renders one titled group
- * per source, and orders them by `order` — so a source registered below the
- * command source's default 0 lands above it. That is what this does.
+ * The `+` launcher opens only the `command` source, so a separate source
+ * cannot appear in it. The typed `/` path is different: it seeds from the FULL
+ * roster (`roster.sources(hit.trigger)` with no name filter), renders one titled
+ * group per source, and orders them by `order` — so a source registered below
+ * the command source's default 0 lands above it. That is what this does.
  *
  * `onPick` returns `'handled'`: the row is a button, not a submenu. Picking it
  * opens the OS file dialog immediately, with no second layer in between.
@@ -413,6 +477,9 @@ function registerBalanceBadge(ctx: Context): void {
         registrant: 'dsh-ext',
         inject: (sessionId: string) => ({ sessionId }),
       }, function DevToolBalanceBadge(props: { sessionId?: string }) {
+        // Ensures the composer top-bar spacing is injected even when only the Git
+        // controls are enabled (the old code only injected it from BalanceBadge).
+        injectBadgeStyles()
         const config = useClientConfig()
         const [cardEl, setCardEl] = useState<HTMLElement | null>(null)
         const anchorRef = useRef<HTMLSpanElement | null>(null)

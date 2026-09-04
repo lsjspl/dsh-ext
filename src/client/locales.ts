@@ -543,7 +543,7 @@ export const zh: Record<LocaleKey, string> = {
   'images.drag.hint': '拖动缩略图，或用它的 ‹ › 按钮。消息发送中会拒绝改顺序。',
   'images.add': '添加图片',
   'images.pickHint': '为这条消息附加图片',
-  'files.attach': '附加文件',
+  'files.attach': '添加附件',
   'files.attachHint': '从本机选一个文件附加进来',
   'files.notImage': '{name} 不是图片，已把它的文本内容加进消息。',
   'files.unreadable': '{name} 无法附加：既不是图片，也不是文本。',
