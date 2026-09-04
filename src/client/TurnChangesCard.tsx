@@ -8,7 +8,7 @@ import { Notice, buttonStyle, token } from './ui.tsx'
 import { useT } from './use-locale.ts'
 import { useResource } from './use-resource.ts'
 import { useClientConfig } from './use-client-config.ts'
-import { rewindTurn } from './rewind.ts'
+import { rewindTurn, normalizeWorkspacePath, trashSession, type WorkspacesFace } from './rewind.ts'
 import { useTurnInfo as useTurnInfoStore } from './turn-info-store.ts'
 import { currentPanelScope, openPanelTab, type TabKind } from './tabs.ts'
 import { setPanelOpen } from './panel-state.ts'
@@ -58,37 +58,6 @@ function dirOf(path: string): string {
   return slash < 0 ? '' : path.slice(0, slash + 1)
 }
 
-/**
- * Compare two workspace paths as the same project regardless of casing or a
- * trailing separator. Windows and the host's workspace registry can render the
- * same folder as `C:\proj`, `c:\proj\`, or `C:/proj`; the first-turn undo
- * fallback uses this only to match a path to a registered workspace id, so a
- * loose comparison is the safe direction (it never matches two DIFFERENT
- * projects, only the same one written differently).
- */
-function normalizeWorkspacePath(path: string | undefined): string {
-  if (path === undefined) return ''
-  return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
-}
-
-/**
- * Archive a session into the bin by marking it with the host's own archive set.
- * This is how undo/edit removes the original session from the sidebar: the host
- * hides it from grouping surfaces but keeps its log, and the recycle bin lists
- * it. Best-effort — returns false when the feature is off or the call fails, so
- * a first-turn undo still succeeds (the fresh session is already open) and
- * simply leaves the original in place.
- */
-async function trashSession(sessionId: string, archive: (id: string) => Promise<unknown>): Promise<boolean> {
-  try {
-    await archive(sessionId)
-    return true
-  } catch (error: unknown) {
-    console.warn('[dsh-ext] archiving the original session failed:', error)
-    return false
-  }
-}
-
 function nameOf(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1)
 }
@@ -132,7 +101,7 @@ export function TurnChangesCard(props: {
   /** Workspace rows from the host's global feed, for the first-turn fallback. */
   workspaceItems?: readonly { workspaceId: string; path: string }[]
   /** The host's workspaces service, for the first-turn fresh-session fallback and the undo archive. */
-  workspaces?: { connectWorkspace(workspaceId: string): Promise<string>; archiveSession(sessionId: string): Promise<void> }
+  workspaces?: WorkspacesFace & { archiveSession?(sessionId: string): Promise<void> }
   /** True while the plugin config is still loading; renders the placeholder only. */
   disabled?: boolean
   sessions?: ISessions
@@ -243,7 +212,7 @@ export function TurnChangesCard(props: {
    * powers the first-turn fallback: with nothing to fork to, the "branch" is a
    * fresh session on the same project.
    */
-  const workspaceItems = props.workspaceItems
+  const workspaceItems = props.workspaceItems ?? props.workspaces?.list?.getSnapshot?.()?.items
   const rewind = async (): Promise<{ ok: true; childId: string } | { ok: false; message: string }> => {
     if (props.sessions === undefined) return { ok: false, message: t('turn.firstTurnNoFork') }
     const result = await rewindTurn({
@@ -283,7 +252,7 @@ export function TurnChangesCard(props: {
     // must not make the undo itself fail. Archiving happens AFTER the new
     // session is live so a failed archive only leaves the original in the
     // list, never strands the user without a session.
-    const trashed = await trashSession(props.sessionId, async (id) => { await props.workspaces?.archiveSession(id as never) })
+    const trashed = await trashSession(props.sessionId, async (id) => { await props.workspaces?.archiveSession?.(id as never) })
     // Archiving marks the session in the host's archive set; the host refreshes
     // its list baseline on the next reconnect. The narrow ISessions face hides
     // refresh; call it only if the runtime object actually has it (a fallback

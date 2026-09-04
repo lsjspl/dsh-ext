@@ -5,7 +5,7 @@ import { callApi } from './api.ts'
 import { CheckIcon, EditIcon } from './icons.tsx'
 import { Notice, buttonStyle, token } from './ui.tsx'
 import { useT } from './use-locale.ts'
-import { rewindTurn, resendEditedQuestion, userTextOf } from './rewind.ts'
+import { rewindTurn, resendEditedQuestion, userTextOf, normalizeWorkspacePath, trashSession, type WorkspacesFace } from './rewind.ts'
 import type { TurnInfoView } from '../shared/api-contract.ts'
 
 /**
@@ -78,6 +78,8 @@ function BubbleActions(props: { text: string; onEdit: () => void; copied: boolea
   )
 }
 
+const PENCIL_SIZE = 14
+
 export function UserEditBubble(props: {
   /** The framework-injected session id of the scoped slot. */
   sessionId: string
@@ -87,7 +89,7 @@ export function UserEditBubble(props: {
   /** The framework's global workspace feed; enables the first-turn fallback. */
   useWorkspaces?: <T>(select: (state: { items: readonly { workspaceId: string; path: string }[] }) => T) => T
   /** The host's workspaces service, for the first-turn fresh-session fallback and the undo archive. */
-  workspaces?: { connectWorkspace(workspaceId: string): Promise<string>; archiveSession(sessionId: string): Promise<void> }
+  workspaces?: WorkspacesFace & { archiveSession?(sessionId: string): Promise<void> }
 }) {
   const t = useT()
   const [editing, setEditing] = useState(false)
@@ -97,6 +99,7 @@ export function UserEditBubble(props: {
   const [copied, setCopied] = useState(false)
   const text = userTextOf(props.node.content)
   const workspaceItems = props.useWorkspaces?.(state => state.items)
+    ?? props.workspaces?.list?.getSnapshot?.()?.items
 
   const startEdit = () => {
     setDraft(text)
@@ -119,7 +122,7 @@ export function UserEditBubble(props: {
     setError(undefined)
     // Map this message's durable seq to its turn, with the chat fields the
     // rewind needs. One endpoint call; the server owns the log mapping.
-    const mapped = await callApi<{ turn: number; checkpointId?: string; undoAnchorSeq?: number }>(
+    const mapped = await callApi<{ turn: number; checkpointId?: string; undoAnchorSeq?: number; workspace?: string }>(
       `/checkpoints/turn-info?session=${encodeURIComponent(props.sessionId)}&seq=${props.node.seq}&detail=1`,
     )
     if (!mapped.ok) {
@@ -128,13 +131,6 @@ export function UserEditBubble(props: {
       return
     }
     const info = mapped.value as TurnInfoView & { turn: number }
-    // A first turn has no checkpoint to restore and nothing to cut — the
-    // rewind engine routes that case to a fresh session on the same project.
-    if (info.checkpointId === undefined) {
-      setBusy(false)
-      setError(t('turn.firstTurnNoFork'))
-      return
-    }
     const result = await rewindTurn({
       sessions: props.sessions,
       workspaces: props.workspaces,
@@ -144,7 +140,10 @@ export function UserEditBubble(props: {
       forkFailedText: message => t('cp.forkFailed', { message }),
       firstTurnText: t('turn.firstTurnNoFork'),
       workspace: info.workspace,
-      workspaceIdOf: path => workspaceItems?.find(item => item.path === path)?.workspaceId,
+      workspaceIdOf: path => {
+        const target = normalizeWorkspacePath(path)
+        return workspaceItems?.find(item => normalizeWorkspacePath(item.path) === target)?.workspaceId
+      },
     })
     if (!result.ok) {
       setBusy(false)
@@ -160,7 +159,13 @@ export function UserEditBubble(props: {
       // the sidebar, listed in the recycle bin). Best-effort: a failed archive
       // only leaves the original in the list, never fails the re-answer.
       try {
-        await props.workspaces?.archiveSession(props.sessionId as never)
+        const trashed = await trashSession(props.sessionId, async (id) => {
+          await props.workspaces?.archiveSession?.(id as never)
+        })
+        if (trashed) {
+          const sessionsRef = props.sessions as unknown as { refresh?: () => Promise<void> }
+          await sessionsRef.refresh?.().catch(() => {})
+        }
       } catch (archiveError: unknown) {
         console.warn('[dsh-ext] archiving the original session after edit failed:', archiveError)
       }

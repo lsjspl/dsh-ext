@@ -129,3 +129,25 @@ export function splitNul(text: string): string[] {
   if (parts.length > 0 && parts[parts.length - 1] === '') parts.pop()
   return parts
 }
+
+/**
+ * Determine the current branch name, whether it is detached, and whether the branch is unborn (empty repo).
+ */
+export async function gitBranchState(cwd: string, signal?: AbortSignal): Promise<{
+  branch?: string
+  isDetached: boolean
+  isUnborn: boolean
+}> {
+  const symRef = await git(['symbolic-ref', '--short', '-q', 'HEAD'], { cwd, signal })
+  const hasHead = await git(['rev-parse', '--verify', 'HEAD'], { cwd, signal })
+  const isUnborn = !hasHead.ok
+  if (symRef.ok && symRef.stdout.trim().length > 0) {
+    return { branch: symRef.stdout.trim(), isDetached: false, isUnborn }
+  }
+  if (hasHead.ok) {
+    const headSha = await git(['rev-parse', '--short', 'HEAD'], { cwd, signal })
+    return { branch: headSha.stdout.trim(), isDetached: true, isUnborn: false }
+  }
+  return { branch: undefined, isDetached: false, isUnborn: true }
+}
+

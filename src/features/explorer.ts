@@ -84,12 +84,12 @@ const ALWAYS_HIDDEN = new Set(['.git', 'node_modules', '.venv', '__pycache__', '
  * @param requested - client-supplied workspace-relative path (may be empty).
  * @returns the absolute canonical path to read.
  */
-async function containedPath(root: string, requested: string): Promise<string> {
+export async function containedPath(root: string, requested: string): Promise<string> {
   if (requested.length === 0) return root
-  if (isAbsolute(requested) || requested.includes('\0')) {
-    throw new ApiError(400, 'path must be relative to the workspace root')
+  if (requested.includes('\0')) {
+    throw new ApiError(400, 'invalid path')
   }
-  const candidate = resolve(root, requested)
+  const candidate = isAbsolute(requested) ? resolve(requested) : resolve(root, requested)
   let real: string
   try {
     real = await realpath(candidate)
@@ -995,7 +995,7 @@ async function sessionRootFromHeader(ctx: Context, sessionId: string, signal: Ab
  * the current one — and a changes list belonging to a different repository looks
  * authoritative while being wrong.
  */
-async function resolveRoot(
+export async function resolveRoot(
   ctx: Context,
   requestedId: string | null,
   sessionId: string | null | undefined,

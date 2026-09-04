@@ -367,3 +367,93 @@ export const DEFAULT_EFFORT_LADDER: readonly EffortRung[] = [
   { id: 'xhigh', name: 'Extra high', description: 'Extended reasoning beyond high.', wire: 'xhigh' },
   { id: 'max', name: 'Max', description: 'The most reasoning the model will do.', wire: 'max' },
 ]
+
+// ── Git operations & Branch/Worktree management ─────────────────────────────
+
+export interface GitBranchInfo {
+  readonly name: string
+  readonly isCurrent: boolean
+  readonly isRemote: boolean
+  readonly commit: string
+  readonly subject: string
+  readonly upstream?: string
+  readonly ahead?: number
+  readonly behind?: number
+  readonly boundSessionCount?: number
+}
+
+export interface GitBranchesResult {
+  readonly current?: string
+  readonly isDetached: boolean
+  readonly isUnborn: boolean
+  readonly local: readonly GitBranchInfo[]
+  readonly remote: readonly GitBranchInfo[]
+}
+
+export interface GitWorktreeInfo {
+  readonly path: string
+  readonly head: string
+  readonly branch?: string
+  readonly bare?: boolean
+  readonly detached?: boolean
+  readonly isCurrent: boolean
+  readonly isWorkspace: boolean
+  readonly isMain: boolean
+  readonly workspaceId?: string
+}
+
+export interface GitWorktreesResult {
+  readonly worktrees: readonly GitWorktreeInfo[]
+}
+
+export interface SessionGitBinding {
+  readonly sessionId: string
+  readonly repoRoot: string
+  readonly branch: string
+  readonly worktreePath?: string
+  readonly locked: boolean
+  readonly createdAt: number
+}
+
+export interface SessionBindingResult {
+  readonly isRepository: boolean
+  readonly binding?: SessionGitBinding
+  readonly currentBranch?: string
+  readonly isDetached?: boolean
+  readonly isUnborn?: boolean
+}
+
+export interface GitStageResult {
+  readonly ok: boolean
+  readonly stagedCount: number
+  readonly unstagedCount: number
+}
+
+export interface GitDiscardResult {
+  readonly ok: boolean
+  readonly discardedCount?: number
+  readonly message?: string
+}
+
+export interface GitCommitResult {
+  readonly ok: boolean
+  readonly commitHash?: string
+  readonly summary?: string
+  readonly message?: string
+}
+
+export interface GitPushResult {
+  readonly ok: boolean
+  readonly message?: string
+  readonly needAuth?: boolean
+  readonly rejected?: boolean
+}
+
+export interface GenerateCommitResult {
+  readonly ok: boolean
+  readonly fullMessage: string
+  readonly title?: string
+  readonly body?: string
+  readonly error?: string
+}
+

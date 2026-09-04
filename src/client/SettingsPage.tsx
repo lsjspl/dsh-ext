@@ -14,8 +14,73 @@ import {
   type Config,
   type CommandReviewFallback,
   type CommandReviewMode,
+  type GitCommitStyle,
+  type GitCommitLanguage,
+  type GitSessionBindingMode,
 } from '../config.ts'
 import type { ReviewModels } from '../shared/api-contract.ts'
+
+function SubSectionHeader(props: {
+  title: string
+  onReset?: () => void
+  disabled?: boolean
+  resetTitle?: string
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '16px 0 6px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span
+          aria-hidden="true"
+          style={{
+            display: 'inline-block',
+            width: 3,
+            height: 12,
+            borderRadius: 1.5,
+            background: 'var(--dsw-alias-state-business-primary, #2563eb)',
+          }}
+        />
+        <span style={{ fontSize: 13, fontWeight: 600, color: token.text }}>
+          {props.title}
+        </span>
+      </div>
+      {props.onReset && (
+        <button
+          type="button"
+          onClick={props.onReset}
+          title={props.resetTitle ?? 'Reset'}
+          disabled={props.disabled}
+          style={{
+            ...buttonStyle,
+            fontSize: 11.5,
+            padding: '2px 8px',
+            borderRadius: 5,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            background: 'transparent',
+            border: `1px solid ${token.border}`,
+            color: token.textMuted,
+            cursor: props.disabled ? 'not-allowed' : 'pointer',
+            opacity: props.disabled ? 0.6 : 1,
+          }}
+        >
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M2.5 6.5A5.5 5.5 0 1 1 4 11.5" />
+            <path d="M2.5 3v3.5H6" />
+          </svg>
+          <span>{props.resetTitle ?? 'Reset'}</span>
+        </button>
+      )}
+    </div>
+  )
+}
 
 
 /**
@@ -62,7 +127,7 @@ function Disclosure(props: { label: string; children: React.ReactNode; defaultOp
 
 
 
-const TABS = ['input', 'balance', 'review', 'files', 'sessions', 'plugins'] as const
+const TABS = ['input', 'balance', 'review', 'files', 'git', 'sessions', 'plugins'] as const
 
 type Tab = (typeof TABS)[number]
 
@@ -99,6 +164,7 @@ function TabStrip(props: { active: Tab; onSelect: (tab: Tab) => void }) {
     balance: t('tab.balance'),
     review: t('tab.review'),
     files: t('tab.files'),
+    git: t('tab.git'),
     sessions: t('tab.sessions'),
     plugins: t('tab.plugins'),
   }
@@ -281,6 +347,97 @@ export function SettingsPage() {
     setMany(ops)
   }
 
+  // 1. 审核模式与模型策略（分组 1）独立重置
+  const resetReviewModeAndModel = () => {
+    if (disabled) return
+    let provider = DEFAULT_CONFIG.commandReview.provider
+    let model = DEFAULT_CONFIG.commandReview.model
+    if (reviewModels.data?.models) {
+      const best = findDefaultOfficialFlash(reviewModels.data.models)
+      if (best) {
+        provider = best.provider
+        model = best.model
+      }
+    }
+    setMany([
+      { path: ['commandReview', 'enabled'], value: DEFAULT_CONFIG.commandReview.enabled },
+      { path: ['commandReview', 'autoReview'], value: DEFAULT_CONFIG.commandReview.autoReview },
+      { path: ['commandReview', 'mode'], value: DEFAULT_CONFIG.commandReview.mode },
+      { path: ['commandReview', 'provider'], value: provider },
+      { path: ['commandReview', 'model'], value: model },
+      { path: ['commandReview', 'timeoutMs'], value: DEFAULT_CONFIG.commandReview.timeoutMs },
+      { path: ['commandReview', 'onFailure'], value: DEFAULT_CONFIG.commandReview.onFailure },
+    ])
+  }
+
+  // 2. 过滤与阻断策略（分组 2）独立重置
+  const resetReviewFilters = () => {
+    if (disabled) return
+    setMany([
+      { path: ['commandReview', 'writeOnly'], value: DEFAULT_CONFIG.commandReview.writeOnly },
+      { path: ['commandReview', 'absoluteDenyDelete'], value: DEFAULT_CONFIG.commandReview.absoluteDenyDelete },
+      { path: ['commandReview', 'tools'], value: [...DEFAULT_CONFIG.commandReview.tools] },
+    ])
+  }
+
+  // 3. 自定义正则规则（分组 3）独立重置所有三类规则
+  const resetReviewRules = () => {
+    if (disabled) return
+    setMany([
+      { path: ['commandReview', 'denyPatterns'], value: [...DEFAULT_CONFIG.commandReview.denyPatterns] },
+      { path: ['commandReview', 'readPatterns'], value: [...DEFAULT_CONFIG.commandReview.readPatterns] },
+      { path: ['commandReview', 'deletePatterns'], value: [...DEFAULT_CONFIG.commandReview.deletePatterns] },
+    ])
+  }
+
+  // 重置当前选中的正则分类规则
+  const resetCurrentRuleSubTab = () => {
+    if (disabled) return
+    if (ruleSubTab === 'deny') {
+      set(['commandReview', 'denyPatterns'], [...DEFAULT_CONFIG.commandReview.denyPatterns])
+    } else if (ruleSubTab === 'read') {
+      set(['commandReview', 'readPatterns'], [...DEFAULT_CONFIG.commandReview.readPatterns])
+    } else if (ruleSubTab === 'delete') {
+      set(['commandReview', 'deletePatterns'], [...DEFAULT_CONFIG.commandReview.deletePatterns])
+    }
+  }
+
+  // Git 4 个独立子分组重置逻辑
+  const resetGitCommit = () => {
+    if (disabled) return
+    setMany([
+      { path: ['git', 'provider'], value: DEFAULT_CONFIG.git.provider },
+      { path: ['git', 'model'], value: DEFAULT_CONFIG.git.model },
+      { path: ['git', 'commitStyle'], value: DEFAULT_CONFIG.git.commitStyle },
+      { path: ['git', 'commitLanguage'], value: DEFAULT_CONFIG.git.commitLanguage },
+      { path: ['git', 'autoStageAll'], value: DEFAULT_CONFIG.git.autoStageAll },
+    ])
+  }
+
+  const resetGitBinding = () => {
+    if (disabled) return
+    setMany([
+      { path: ['git', 'sessionBinding'], value: DEFAULT_CONFIG.git.sessionBinding },
+      { path: ['git', 'autoAlignBranch'], value: DEFAULT_CONFIG.git.autoAlignBranch },
+    ])
+  }
+
+  const resetGitWorktree = () => {
+    if (disabled) return
+    setMany([
+      { path: ['git', 'worktreeDirPattern'], value: DEFAULT_CONFIG.git.worktreeDirPattern },
+      { path: ['git', 'worktreeAutoRegister'], value: DEFAULT_CONFIG.git.worktreeAutoRegister },
+    ])
+  }
+
+  const resetGitPush = () => {
+    if (disabled) return
+    setMany([
+      { path: ['git', 'pushAutoSetUpstream'], value: DEFAULT_CONFIG.git.pushAutoSetUpstream },
+      { path: ['git', 'pushTimeoutSeconds'], value: DEFAULT_CONFIG.git.pushTimeoutSeconds },
+    ])
+  }
+
 
   return (
     <div style={{ padding: '0 2px 48px', color: token.text }} data-dsh-plugin="dsh-ext">
@@ -448,224 +605,314 @@ export function SettingsPage() {
         )}
 
         {tab === 'review' && (
-          <>
+          <Section
+            title={t('tab.review')}
+            description={t('section.review.desc')}
+            action={<Toggle label={t('tab.review')} checked={c.commandReview.enabled} disabled={disabled}
+              onChange={next => { set(['commandReview', 'enabled'], next) }} />}
+            onReset={() => { resetSection('commandReview') }}
+          >
             {/* 1. 审核模式与模型策略 */}
-            <Section
-              title={t('section.review')}
-              description={t('section.review.desc')}
-              action={<Toggle label={t('section.review')} checked={c.commandReview.enabled} disabled={disabled}
-                onChange={next => { set(['commandReview', 'enabled'], next) }} />}
-              onReset={() => { resetSection('commandReview') }}
-            >
-              <Row
-                label={t('review.autoReview')}
-                hint={t('review.autoReview.hint')}
-                control={<Toggle label={t('review.autoReview')} checked={c.commandReview.autoReview ?? false} disabled={disabled || !c.commandReview.enabled}
-                  onChange={next => { set(['commandReview', 'autoReview'], next) }} />}
-              />
+            <Row
+              label={t('review.autoReview')}
+              hint={t('review.autoReview.hint')}
+              control={<Toggle label={t('review.autoReview')} checked={c.commandReview.autoReview ?? false} disabled={disabled || !c.commandReview.enabled}
+                onChange={next => { set(['commandReview', 'autoReview'], next) }} />}
+            />
 
-              <div style={{ padding: '10px 0 14px' }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: token.text, marginBottom: 8 }}>
-                  审核模式
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
-                  {([
-                    {
-                      value: 'rules+llm' as const,
-                      title: '规则初筛 + 模型复审',
-                      desc: '先用本地轻量正则规则秒级初筛，命中可疑指令后再交给大模型深度分析判定。兼顾高安全性与低 API 消耗。',
-                      tag: '推荐',
-                    },
-                    {
-                      value: 'rules-only' as const,
-                      title: '仅本地规则拦截',
-                      desc: '纯离线阻断。完全依据本地正则表达式黑白名单进行拦截或放行，不调用任何第二模型，零额外 Token 消耗、零延迟。',
-                    },
-                    {
-                      value: 'all' as const,
-                      title: '全量模型审查',
-                      desc: '最高防护级别。将覆盖范围内的每一个工具调用无差别提交给大模型进行语义审核裁决，适合极其严苛的安全场景。',
-                    },
-                  ]).map(m => {
-                    const isSelected = c.commandReview.mode === m.value
-                    return (
-                      <div
-                        key={m.value}
-                        onClick={() => {
-                          if (!disabled && c.commandReview.enabled) {
-                            set(['commandReview', 'mode'], m.value)
-                          }
-                        }}
-                        style={{
-                          border: isSelected
-                            ? '1.5px solid var(--dsw-alias-state-business-primary, #2563eb)'
-                            : `1px solid ${token.border}`,
-                          borderRadius: 8,
-                          padding: '12px 14px',
-                          background: isSelected
-                            ? 'var(--dsw-alias-bg-layer-2, rgba(37, 99, 235, 0.06))'
-                            : 'var(--dsw-alias-bg-layer-1, transparent)',
-                          cursor: disabled || !c.commandReview.enabled ? 'default' : 'pointer',
-                          transition: 'all 120ms ease',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 6,
-                          userSelect: 'none',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <span style={{
-                            fontSize: 13,
-                            fontWeight: 600,
-                            color: isSelected ? 'var(--dsw-alias-state-business-primary, #2563eb)' : token.text,
-                          }}>
-                            {m.title}
-                          </span>
-                          {m.tag && (
-                            <span style={{
-                              fontSize: 10,
-                              fontWeight: 600,
-                              padding: '1px 6px',
-                              borderRadius: 10,
-                              background: 'var(--dsw-alias-state-business-primary, #2563eb)',
-                              color: '#fff',
-                            }}>
-                              {m.tag}
-                            </span>
-                          )}
-                        </div>
-                        <p style={{ margin: 0, fontSize: 11.5, color: token.textMuted, lineHeight: 1.5 }}>
-                          {m.desc}
-                        </p>
-                      </div>
-                    )
-                  })}
-                </div>
+            <div style={{ padding: '10px 0 16px', borderBottom: `1px solid ${token.border}` }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: token.text, marginBottom: 8 }}>
+                审核模式
               </div>
-
-              {c.commandReview.mode !== 'rules-only' && (
-                <>
-                  <Row
-                    label={t('review.modelPick')} hint={t('review.modelPick.hint')}
-                    control={(() => {
-                      const list = reviewModels.data?.models ?? []
-                      const map = new Map<string, { value: string; label: string }[]>()
-                      for (const row of list) {
-                        const groupName = row.provider
-                        if (!map.has(groupName)) {
-                          map.set(groupName, [])
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
+                {([
+                  {
+                    value: 'rules+llm' as const,
+                    title: '规则初筛 + 模型复审',
+                    desc: '先用本地轻量正则规则秒级初筛，命中可疑指令后再交给大模型深度分析判定。兼顾高安全性与低 API 消耗。',
+                    tag: '推荐',
+                  },
+                  {
+                    value: 'rules-only' as const,
+                    title: '仅本地规则拦截',
+                    desc: '纯离线阻断。完全依据本地正则表达式黑白名单进行拦截或放行，不调用任何第二模型，零额外 Token 消耗、零延迟。',
+                  },
+                  {
+                    value: 'all' as const,
+                    title: '全量模型审查',
+                    desc: '最高防护级别。将覆盖范围内的每一个工具调用无差别提交给大模型进行语义审核裁决，适合极其严苛的安全场景。',
+                  },
+                ]).map(m => {
+                  const isSelected = c.commandReview.mode === m.value
+                  return (
+                    <div
+                      key={m.value}
+                      onClick={() => {
+                        if (!disabled && c.commandReview.enabled) {
+                          set(['commandReview', 'mode'], m.value)
                         }
-                        map.get(groupName)!.push({
-                          value: `${row.provider}::${row.model}`,
-                          label: row.name || row.model,
-                        })
-                      }
+                      }}
+                      style={{
+                        border: isSelected
+                          ? '1.5px solid var(--dsw-alias-state-business-primary, #2563eb)'
+                          : `1px solid ${token.border}`,
+                        borderRadius: 8,
+                        padding: '12px 14px',
+                        background: isSelected
+                          ? 'var(--dsw-alias-bg-layer-2, rgba(37, 99, 235, 0.06))'
+                          : 'var(--dsw-alias-bg-layer-1, transparent)',
+                        cursor: disabled || !c.commandReview.enabled ? 'default' : 'pointer',
+                        transition: 'all 120ms ease',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 6,
+                        userSelect: 'none',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: isSelected ? 'var(--dsw-alias-state-business-primary, #2563eb)' : token.text,
+                        }}>
+                          {m.title}
+                        </span>
+                        {m.tag && (
+                          <span style={{
+                            fontSize: 10,
+                            fontWeight: 600,
+                            padding: '1px 6px',
+                            borderRadius: 10,
+                            background: 'var(--dsw-alias-state-business-primary, #2563eb)',
+                            color: '#fff',
+                          }}>
+                            {m.tag}
+                          </span>
+                        )}
+                      </div>
+                      <p style={{ margin: 0, fontSize: 11.5, color: token.textMuted, lineHeight: 1.5 }}>
+                        {m.desc}
+                      </p>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
 
-                      // Ensure current selection is present in its provider group if dormant
-                      if (currentModelKey) {
-                        const separator = currentModelKey.indexOf('::')
-                        const p = separator >= 0 ? currentModelKey.slice(0, separator) : c.commandReview.provider
-                        const m = separator >= 0 ? currentModelKey.slice(separator + 2) : c.commandReview.model
-                        const currentGroup = map.get(p)
-                        if (currentGroup) {
-                          if (!currentGroup.some(item => item.value === currentModelKey)) {
-                            currentGroup.unshift({ value: currentModelKey, label: m })
-                          }
-                        } else {
-                          map.set(p, [{ value: currentModelKey, label: m }])
+            {c.commandReview.mode !== 'rules-only' && (
+              <>
+                <Row
+                  label={t('review.modelPick')} hint={t('review.modelPick.hint')}
+                  control={(() => {
+                    const list = reviewModels.data?.models ?? []
+                    const map = new Map<string, { value: string; label: string }[]>()
+                    for (const row of list) {
+                      const groupName = row.provider
+                      if (!map.has(groupName)) {
+                        map.set(groupName, [])
+                      }
+                      map.get(groupName)!.push({
+                        value: `${row.provider}::${row.model}`,
+                        label: row.name || row.model,
+                      })
+                    }
+
+                    if (currentModelKey) {
+                      const separator = currentModelKey.indexOf('::')
+                      const p = separator >= 0 ? currentModelKey.slice(0, separator) : c.commandReview.provider
+                      const m = separator >= 0 ? currentModelKey.slice(separator + 2) : c.commandReview.model
+                      const currentGroup = map.get(p)
+                      if (currentGroup) {
+                        if (!currentGroup.some(item => item.value === currentModelKey)) {
+                          currentGroup.unshift({ value: currentModelKey, label: m })
                         }
+                      } else {
+                        map.set(p, [{ value: currentModelKey, label: m }])
                       }
+                    }
 
-                      const groups = Array.from(map.entries()).map(([group, options]) => ({
-                        group,
-                        options,
-                      }))
+                    const groups = Array.from(map.entries()).map(([group, options]) => ({
+                      group,
+                      options,
+                    }))
 
-                      return (
-                        <Select
-                          label={t('review.modelPick')}
-                          value={currentModelKey}
-                          disabled={disabled || !c.commandReview.enabled}
-                          onChange={next => {
-                            const separator = next.indexOf('::')
-                            setMany([
-                              { path: ['commandReview', 'provider'], value: next.slice(0, separator) },
-                              { path: ['commandReview', 'model'], value: next.slice(separator + 2) },
-                            ])
-                          }}
-                          width={220}
-                          maxWidth="100%"
-                          groups={groups}
-                        />
-                      )
-                    })()}
-                  />
-                  <Row
+                    return (
+                      <Select
+                        label={t('review.modelPick')}
+                        value={currentModelKey}
+                        disabled={disabled || !c.commandReview.enabled}
+                        onChange={next => {
+                          const separator = next.indexOf('::')
+                          setMany([
+                            { path: ['commandReview', 'provider'], value: next.slice(0, separator) },
+                            { path: ['commandReview', 'model'], value: next.slice(separator + 2) },
+                          ])
+                        }}
+                        width={220}
+                        maxWidth="100%"
+                        groups={groups}
+                      />
+                    )
+                  })()}
+                />
+                <Row
+                  label={t('review.timeout')}
+                  hint={t('review.timeout.hint')}
+                  control={<NumberField
                     label={t('review.timeout')}
-                    hint={t('review.timeout.hint')}
-                    control={<NumberField
-                      label={t('review.timeout')}
-                      value={c.commandReview.timeoutMs}
-                      min={1000} max={120000} step={500}
-                      suffix="毫秒"
-                      disabled={disabled || !c.commandReview.enabled}
-                      onCommit={next => { set(['commandReview', 'timeoutMs'], next) }} />}
-                  />
-                  <Row
-                    label={t('review.onFailure')}
-                    hint={t('review.onFailure.hint')}
-                    control={<Select<CommandReviewFallback>
-                      label={t('review.onFailure')} value={c.commandReview.onFailure} disabled={disabled || !c.commandReview.enabled}
-                      onChange={next => { set(['commandReview', 'onFailure'], next) }}
-                      options={[
-                        { value: 'ask', label: t('review.onFailure.ask') },
-                        { value: 'deny', label: t('review.onFailure.deny') },
-                        { value: 'allow', label: t('review.onFailure.allow') },
-                      ]} />}
-                  />
-                </>
-              )}
-            </Section>
+                    value={c.commandReview.timeoutMs}
+                    min={1000} max={120000} step={500}
+                    suffix="毫秒"
+                    disabled={disabled || !c.commandReview.enabled}
+                    onCommit={next => { set(['commandReview', 'timeoutMs'], next) }} />}
+                />
+                <Row
+                  label={t('review.onFailure')}
+                  hint={t('review.onFailure.hint')}
+                  control={<Select<CommandReviewFallback>
+                    label={t('review.onFailure')} value={c.commandReview.onFailure} disabled={disabled || !c.commandReview.enabled}
+                    onChange={next => { set(['commandReview', 'onFailure'], next) }}
+                    options={[
+                      { value: 'ask', label: t('review.onFailure.ask') },
+                      { value: 'deny', label: t('review.onFailure.deny') },
+                      { value: 'allow', label: t('review.onFailure.allow') },
+                    ]} />}
+                />
+              </>
+            )}
 
-            {/* 2. 命令拦截与放行策略 */}
-            <Section
-              title="过滤与阻断策略"
-              description="在调用审查前进行前置规则过滤，可跳过只读查询或直接拒绝危险删除操作。"
+            {/* 2. 命令拦截与放行策略 (内部结构化子分组) */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '16px 0 6px',
+              }}
             >
-              <Row
-                label={t('review.writeOnly')} hint={t('review.writeOnly.hint')}
-                control={<Toggle label={t('review.writeOnly')} checked={c.commandReview.writeOnly ?? true} disabled={disabled || !c.commandReview.enabled}
-                  onChange={next => { set(['commandReview', 'writeOnly'], next) }} />}
-              />
-              <Row
-                label={t('review.absoluteDelete')} hint={t('review.absoluteDelete.hint')}
-                control={<Toggle label={t('review.absoluteDelete')} checked={c.commandReview.absoluteDenyDelete ?? true} disabled={disabled || !c.commandReview.enabled}
-                  onChange={next => { set(['commandReview', 'absoluteDenyDelete'], next) }} />}
-              />
-              <Row
-                label={t('review.tools')}
-                hint={t('review.tools.hint')}
-                control={<TextField
-                  label={t('review.tools')}
-                  value={(c.commandReview.tools ?? ['bash', 'pwsh', 'run_command']).join(', ')}
-                  width={220}
-                  disabled={disabled || !c.commandReview.enabled}
-                  onCommit={next => {
-                    const tools = next.split(',').map(s => s.trim()).filter(Boolean)
-                    set(['commandReview', 'tools'], tools)
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    display: 'inline-block',
+                    width: 3,
+                    height: 12,
+                    borderRadius: 1.5,
+                    background: 'var(--dsw-alias-state-business-primary, #2563eb)',
                   }}
-                />}
-              />
+                />
+                <span style={{ fontSize: 13, fontWeight: 600, color: token.text }}>
+                  {t('review.section.filter')}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={resetReviewFilters}
+                title={t('common.reset')}
+                disabled={disabled || !c.commandReview.enabled}
+                style={{
+                  ...buttonStyle,
+                  fontSize: 11.5,
+                  padding: '2px 8px',
+                  borderRadius: 5,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  background: 'transparent',
+                  border: `1px solid ${token.border}`,
+                  color: token.textMuted,
+                  cursor: disabled || !c.commandReview.enabled ? 'not-allowed' : 'pointer',
+                  opacity: disabled || !c.commandReview.enabled ? 0.6 : 1,
+                }}
+              >
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M2.5 6.5A5.5 5.5 0 1 1 4 11.5" />
+                  <path d="M2.5 3v3.5H6" />
+                </svg>
+                <span>{t('common.reset')}</span>
+              </button>
+            </div>
 
-            </Section>
+            <Row
+              label={t('review.writeOnly')} hint={t('review.writeOnly.hint')}
+              control={<Toggle label={t('review.writeOnly')} checked={c.commandReview.writeOnly ?? true} disabled={disabled || !c.commandReview.enabled}
+                onChange={next => { set(['commandReview', 'writeOnly'], next) }} />}
+            />
+            <Row
+              label={t('review.absoluteDelete')} hint={t('review.absoluteDelete.hint')}
+              control={<Toggle label={t('review.absoluteDelete')} checked={c.commandReview.absoluteDenyDelete ?? true} disabled={disabled || !c.commandReview.enabled}
+                onChange={next => { set(['commandReview', 'absoluteDenyDelete'], next) }} />}
+            />
+            <Row
+              label={t('review.tools')}
+              hint={t('review.tools.hint')}
+              control={<TextField
+                label={t('review.tools')}
+                value={(c.commandReview.tools ?? ['bash', 'pwsh', 'run_command']).join(', ')}
+                width={220}
+                disabled={disabled || !c.commandReview.enabled}
+                onCommit={next => {
+                  const tools = next.split(',').map(s => s.trim()).filter(Boolean)
+                  set(['commandReview', 'tools'], tools)
+                }}
+              />}
+            />
 
-            {/* 3. 自定义正则规则 */}
-            <Section
-              title="自定义正则规则"
-              description="自定义高危拦截、只读放行与绝对删除特征的正则表达式规则词表。"
+            {/* 3. 自定义正则规则 (内部结构化子分组) */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '16px 0 6px',
+              }}
             >
-              <div style={{ padding: '12px 0 16px' }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    display: 'inline-block',
+                    width: 3,
+                    height: 12,
+                    borderRadius: 1.5,
+                    background: 'var(--dsw-alias-state-business-primary, #2563eb)',
+                  }}
+                />
+                <span style={{ fontSize: 13, fontWeight: 600, color: token.text }}>
+                  {t('review.section.rules')}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={resetReviewRules}
+                title={t('common.reset')}
+                disabled={disabled || !c.commandReview.enabled}
+                style={{
+                  ...buttonStyle,
+                  fontSize: 11.5,
+                  padding: '2px 8px',
+                  borderRadius: 5,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  background: 'transparent',
+                  border: `1px solid ${token.border}`,
+                  color: token.textMuted,
+                  cursor: disabled || !c.commandReview.enabled ? 'not-allowed' : 'pointer',
+                  opacity: disabled || !c.commandReview.enabled ? 0.6 : 1,
+                }}
+              >
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M2.5 6.5A5.5 5.5 0 1 1 4 11.5" />
+                  <path d="M2.5 3v3.5H6" />
+                </svg>
+                <span>{t('common.reset')}</span>
+              </button>
+            </div>
+
+            <div style={{ padding: '8px 0 12px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                   {[
                     { id: 'deny' as const, label: t('review.denyPatterns') },
                     { id: 'read' as const, label: t('review.readPatterns') },
@@ -679,8 +926,8 @@ export function SettingsPage() {
                         onClick={() => { setRuleSubTab(tabItem.id) }}
                         style={{
                           ...buttonStyle,
-                          padding: '6px 14px',
-                          fontSize: 12.5,
+                          padding: '5px 12px',
+                          fontSize: 12,
                           borderRadius: 6,
                           fontWeight: active ? 600 : 400,
                           border: active
@@ -699,70 +946,103 @@ export function SettingsPage() {
                     )
                   })}
                 </div>
-
-                {ruleSubTab === 'deny' && (
-                  <div style={{ width: '100%', boxSizing: 'border-box' }}>
-                    <div style={{ fontSize: 12, color: token.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
-                      每行一条正则表达式。命中此列表特征的命令将被识别为高危操作，进入第二模型深度审核流程。
-                    </div>
-                    <TextAreaField
-                      label={t('review.denyPatterns')}
-                      value={c.commandReview.denyPatterns.join('\n')}
-                      disabled={disabled || !c.commandReview.enabled}
-                      rows={6}
-                      onCommit={next => {
-                        set(['commandReview', 'denyPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
-                      }}
-                    />
-                  </div>
-                )}
-
-                {ruleSubTab === 'read' && (
-                  <div style={{ width: '100%', boxSizing: 'border-box' }}>
-                    <div style={{ fontSize: 12, color: token.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
-                      每行一条正则表达式。命中此列表特征的命令将被识别为纯只读查询，直接跳过模型审核并放行。
-                    </div>
-                    <TextAreaField
-                      label={t('review.readPatterns')}
-                      value={(c.commandReview.readPatterns ?? DEFAULT_READ_PATTERNS).join('\n')}
-                      disabled={disabled || !c.commandReview.enabled || !(c.commandReview.writeOnly ?? true)}
-                      rows={6}
-                      onCommit={next => {
-                        set(['commandReview', 'readPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
-                      }}
-                    />
-                  </div>
-                )}
-
-                {ruleSubTab === 'delete' && (
-                  <div style={{ width: '100%', boxSizing: 'border-box' }}>
-                    <div style={{ fontSize: 12, color: token.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
-                      每行一条正则表达式。命中此列表特征的删除操作将直接拒绝执行，彻底阻断破坏性操作。
-                    </div>
-                    <TextAreaField
-                      label={t('review.deletePatterns')}
-                      value={(c.commandReview.deletePatterns ?? DEFAULT_DELETE_PATTERNS).join('\n')}
-                      disabled={disabled || !c.commandReview.enabled || !(c.commandReview.absoluteDenyDelete ?? true)}
-                      rows={6}
-                      onCommit={next => {
-                        set(['commandReview', 'deletePatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
-                      }}
-                    />
-                  </div>
-                )}
+                <button
+                  type="button"
+                  onClick={resetCurrentRuleSubTab}
+                  title={t('review.resetCurrentRule')}
+                  disabled={disabled || !c.commandReview.enabled}
+                  style={{
+                    ...buttonStyle,
+                    fontSize: 11.5,
+                    padding: '3px 8px',
+                    borderRadius: 5,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    background: 'transparent',
+                    border: `1px solid ${token.border}`,
+                    color: token.textMuted,
+                    cursor: disabled || !c.commandReview.enabled ? 'not-allowed' : 'pointer',
+                    opacity: disabled || !c.commandReview.enabled ? 0.6 : 1,
+                  }}
+                  onMouseEnter={e => {
+                    if (!disabled && c.commandReview.enabled) {
+                      e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover, rgba(125, 125, 125, 0.15))'
+                      e.currentTarget.style.color = token.text
+                    }
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = 'transparent'
+                    e.currentTarget.style.color = token.textMuted
+                  }}
+                >
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M2.5 6.5A5.5 5.5 0 1 1 4 11.5" />
+                    <path d="M2.5 3v3.5H6" />
+                  </svg>
+                  <span>{t('review.resetCurrentRule')}</span>
+                </button>
               </div>
-            </Section>
 
-            {/* 4. 审核判定记录 */}
-            <Section
-              title={t('review.verdicts')}
-              description="第二审查模型与本地规则对历史工具调用执行审核判定的日志记录与处置理由。"
-            >
-              <div style={{ padding: '6px 0 12px' }}>
+              {ruleSubTab === 'deny' && (
+                <div style={{ width: '100%', boxSizing: 'border-box' }}>
+                  <div style={{ fontSize: 12, color: token.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
+                    每行一条正则表达式。命中此列表特征的命令将被识别为高危操作，进入第二模型深度审核流程。
+                  </div>
+                  <TextAreaField
+                    label={t('review.denyPatterns')}
+                    value={c.commandReview.denyPatterns.join('\n')}
+                    disabled={disabled || !c.commandReview.enabled}
+                    rows={6}
+                    onCommit={next => {
+                      set(['commandReview', 'denyPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                    }}
+                  />
+                </div>
+              )}
+
+              {ruleSubTab === 'read' && (
+                <div style={{ width: '100%', boxSizing: 'border-box' }}>
+                  <div style={{ fontSize: 12, color: token.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
+                    每行一条正则表达式。命中此列表特征的命令将被识别为纯只读查询，直接跳过模型审核并放行。
+                  </div>
+                  <TextAreaField
+                    label={t('review.readPatterns')}
+                    value={(c.commandReview.readPatterns ?? DEFAULT_READ_PATTERNS).join('\n')}
+                    disabled={disabled || !c.commandReview.enabled || !(c.commandReview.writeOnly ?? true)}
+                    rows={6}
+                    onCommit={next => {
+                      set(['commandReview', 'readPatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                    }}
+                  />
+                </div>
+              )}
+
+              {ruleSubTab === 'delete' && (
+                <div style={{ width: '100%', boxSizing: 'border-box' }}>
+                  <div style={{ fontSize: 12, color: token.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
+                    每行一条正则表达式。命中此列表特征的删除操作将直接拒绝执行，彻底阻断破坏性操作。
+                  </div>
+                  <TextAreaField
+                    label={t('review.deletePatterns')}
+                    value={(c.commandReview.deletePatterns ?? DEFAULT_DELETE_PATTERNS).join('\n')}
+                    disabled={disabled || !c.commandReview.enabled || !(c.commandReview.absoluteDenyDelete ?? true)}
+                    rows={6}
+                    onCommit={next => {
+                      set(['commandReview', 'deletePatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* 4. 审核判定记录 (折叠收纳) */}
+            <div style={{ marginTop: 8, paddingTop: 6, borderTop: `1px solid ${token.border}` }}>
+              <Disclosure label={t('review.verdicts')}>
                 <AuditPanel enabled={c.commandReview.enabled} />
-              </div>
-            </Section>
-          </>
+              </Disclosure>
+            </div>
+          </Section>
         )}
 
 
@@ -788,9 +1068,214 @@ export function SettingsPage() {
                 onChange={next => { set(['explorer', 'defaultOpen'], next) }} />}
             />
             <Row
+              label={t('explorer.openLinksInPanel')}
+              hint={t('explorer.openLinksInPanel.hint')}
+              control={<Toggle label={t('explorer.openLinksInPanel')} checked={c.explorer.openLinksInPanel ?? true} disabled={disabled || !c.explorer.enabled}
+                onChange={next => { set(['explorer', 'openLinksInPanel'], next) }} />}
+            />
+            <Row
               label={t('explorer.gitignore')}
               control={<Toggle label={t('explorer.gitignore')} checked={c.explorer.respectGitignore} disabled={disabled || !c.explorer.enabled}
                 onChange={next => { set(['explorer', 'respectGitignore'], next) }} />}
+            />
+          </Section>
+        )}
+
+        {tab === 'git' && (
+          <Section
+            title={t('section.git')}
+            description={t('section.git.desc')}
+            action={<Toggle label={t('section.git')} checked={c.git.enabled} disabled={disabled}
+              onChange={next => { set(['git', 'enabled'], next) }} />}
+            onReset={() => { resetSection('git') }}
+          >
+            {/* 1. AI 提交信息生成策略 */}
+            <SubSectionHeader
+              title={t('git.section.commit')}
+              onReset={resetGitCommit}
+              disabled={disabled || !c.git.enabled}
+              resetTitle={t('common.reset')}
+            />
+            <Row
+              label={t('git.model')}
+              hint={t('git.model.hint')}
+              control={
+                <Select<string>
+                  label={t('git.model')}
+                  value={c.git.model ? `${c.git.provider}::${c.git.model}` : ''}
+                  disabled={disabled || !c.git.enabled}
+                  onChange={next => {
+                    if (!next) {
+                      setMany([
+                        { path: ['git', 'provider'], value: '' },
+                        { path: ['git', 'model'], value: '' },
+                      ])
+                    } else {
+                      const [p, ...rest] = next.split('::')
+                      setMany([
+                        { path: ['git', 'provider'], value: p },
+                        { path: ['git', 'model'], value: rest.join('::') },
+                      ])
+                    }
+                  }}
+                  options={[
+                    { value: '', label: t('git.model.followSession') },
+                    ...(reviewModels.data?.models ?? []).map(m => ({
+                      value: `${m.provider}::${m.model}`,
+                      label: `${m.name || m.model} (${m.provider})`,
+                    })),
+                  ]}
+                />
+              }
+            />
+            <Row
+              label={t('git.commitStyle')}
+              control={
+                <Select<GitCommitStyle>
+                  label={t('git.commitStyle')}
+                  value={c.git.commitStyle}
+                  disabled={disabled || !c.git.enabled}
+                  onChange={next => { set(['git', 'commitStyle'], next) }}
+                  options={[
+                    { value: 'conventional', label: t('git.commitStyle.conventional') },
+                    { value: 'simple', label: t('git.commitStyle.simple') },
+                    { value: 'detailed', label: t('git.commitStyle.detailed') },
+                  ]}
+                />
+              }
+            />
+            <Row
+              label={t('git.commitLanguage')}
+              control={
+                <Select<GitCommitLanguage>
+                  label={t('git.commitLanguage')}
+                  value={c.git.commitLanguage}
+                  disabled={disabled || !c.git.enabled}
+                  onChange={next => { set(['git', 'commitLanguage'], next) }}
+                  options={[
+                    { value: 'zh-CN', label: t('git.commitLanguage.zh') },
+                    { value: 'en', label: t('git.commitLanguage.en') },
+                    { value: 'auto', label: t('git.commitLanguage.auto') },
+                  ]}
+                />
+              }
+            />
+            <Row
+              label={t('git.autoStageAll')}
+              hint={t('git.autoStageAll.hint')}
+              control={
+                <Toggle
+                  label={t('git.autoStageAll')}
+                  checked={c.git.autoStageAll}
+                  disabled={disabled || !c.git.enabled}
+                  onChange={next => { set(['git', 'autoStageAll'], next) }}
+                />
+              }
+            />
+
+            {/* 2. 会话与分支绑定机制 */}
+            <SubSectionHeader
+              title={t('git.section.binding')}
+              onReset={resetGitBinding}
+              disabled={disabled || !c.git.enabled}
+              resetTitle={t('common.reset')}
+            />
+            <Row
+              label={t('git.sessionBinding')}
+              control={
+                <Select<GitSessionBindingMode>
+                  label={t('git.sessionBinding')}
+                  value={c.git.sessionBinding}
+                  disabled={disabled || !c.git.enabled}
+                  onChange={next => { set(['git', 'sessionBinding'], next) }}
+                  options={[
+                    { value: 'strict', label: t('git.sessionBinding.strict') },
+                    { value: 'prompt', label: t('git.sessionBinding.prompt') },
+                    { value: 'off', label: t('git.sessionBinding.off') },
+                  ]}
+                />
+              }
+            />
+            <Row
+              label={t('git.autoAlignBranch')}
+              hint={t('git.autoAlignBranch.hint')}
+              control={
+                <Toggle
+                  label={t('git.autoAlignBranch')}
+                  checked={c.git.autoAlignBranch}
+                  disabled={disabled || !c.git.enabled}
+                  onChange={next => { set(['git', 'autoAlignBranch'], next) }}
+                />
+              }
+            />
+
+            {/* 3. Worktree 独立工作区 */}
+            <SubSectionHeader
+              title={t('git.section.worktree')}
+              onReset={resetGitWorktree}
+              disabled={disabled || !c.git.enabled}
+              resetTitle={t('common.reset')}
+            />
+            <Row
+              label={t('git.worktreeDirPattern')}
+              hint={t('git.worktreeDirPattern.hint')}
+              control={
+                <TextField
+                  label={t('git.worktreeDirPattern')}
+                  value={c.git.worktreeDirPattern}
+                  width={240}
+                  disabled={disabled || !c.git.enabled}
+                  onCommit={next => { set(['git', 'worktreeDirPattern'], next.trim() || '../{repo}-{branch}') }}
+                />
+              }
+            />
+            <Row
+              label={t('git.worktreeAutoRegister')}
+              hint={t('git.worktreeAutoRegister.hint')}
+              control={
+                <Toggle
+                  label={t('git.worktreeAutoRegister')}
+                  checked={c.git.worktreeAutoRegister}
+                  disabled={disabled || !c.git.enabled}
+                  onChange={next => { set(['git', 'worktreeAutoRegister'], next) }}
+                />
+              }
+            />
+
+            {/* 4. 推送与远程协作安全策略 */}
+            <SubSectionHeader
+              title={t('git.section.push')}
+              onReset={resetGitPush}
+              disabled={disabled || !c.git.enabled}
+              resetTitle={t('common.reset')}
+            />
+            <Row
+              label={t('git.pushAutoSetUpstream')}
+              hint={t('git.pushAutoSetUpstream.hint')}
+              control={
+                <Toggle
+                  label={t('git.pushAutoSetUpstream')}
+                  checked={c.git.pushAutoSetUpstream}
+                  disabled={disabled || !c.git.enabled}
+                  onChange={next => { set(['git', 'pushAutoSetUpstream'], next) }}
+                />
+              }
+            />
+            <Row
+              label={t('git.pushTimeout')}
+              hint={t('git.pushTimeout.hint')}
+              control={
+                <NumberField
+                  label={t('git.pushTimeout')}
+                  value={c.git.pushTimeoutSeconds}
+                  min={10}
+                  max={300}
+                  step={5}
+                  suffix="秒"
+                  disabled={disabled || !c.git.enabled}
+                  onCommit={next => { set(['git', 'pushTimeoutSeconds'], next) }}
+                />
+              }
             />
           </Section>
         )}

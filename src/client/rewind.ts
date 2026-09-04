@@ -1,6 +1,7 @@
 import type { ISessions } from '@deepseek-ai/dsh-client-runtime/client'
 import { callApi } from './api.ts'
 import type { TurnInfoView } from '../shared/api-contract.ts'
+import { getActiveWorkspaceRoot } from './use-workspace.ts'
 
 /**
  * The rewind engine shared by the two "go back to before this turn" surfaces:
@@ -23,6 +24,107 @@ export type RewindOutcome =
 export interface WorkspacesFace {
   /** Connect a workspace to its reusable or fresh blank session. */
   connectWorkspace(workspaceId: string): Promise<string>
+  archiveSession?(sessionId: string): Promise<void>
+  list?: {
+    getSnapshot(): {
+      items?: readonly { workspaceId: string; path: string; sessionIds?: readonly string[] }[]
+      recentWorkspaceId?: string
+    }
+  }
+}
+
+/** Normalize workspace path for robust platform-agnostic matching. */
+export function normalizeWorkspacePath(path: string | undefined): string {
+  if (path === undefined) return ''
+  return path.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+/**
+ * Archive a session into the bin by marking it with the host's own archive set.
+ * Best-effort: returns false if archive fails or is unavailable.
+ */
+export async function trashSession(
+  sessionId: string,
+  archive?: (id: string) => Promise<unknown>,
+): Promise<boolean> {
+  if (!archive) return false
+  try {
+    await archive(sessionId)
+    return true
+  } catch (error: unknown) {
+    console.warn('[dsh-ext] archiving the session failed:', error)
+    return false
+  }
+}
+
+/**
+ * Resolve the registered workspace ID through multiple cascading heuristics:
+ * caller-provided lookup, workspaces snapshot store, session ID membership,
+ * normalized path matching, session cwd matching, active workspace root, or recent workspace.
+ */
+export function resolveWorkspaceId(props: {
+  workspaces?: WorkspacesFace
+  sessions?: ISessions
+  sessionId?: string
+  workspace?: string
+  workspaceIdOf?: (path: string) => string | undefined
+}): string | undefined {
+  // 1. Caller-provided lookup
+  if (props.workspace !== undefined && props.workspaceIdOf !== undefined) {
+    const fromCaller = props.workspaceIdOf(props.workspace)
+    if (fromCaller !== undefined) return fromCaller
+  }
+
+  // 2. Query workspaces snapshot store
+  const snapshot = props.workspaces?.list?.getSnapshot?.()
+  const items = snapshot?.items
+  if (items !== undefined && items.length > 0) {
+    // 2a. Match by session ID in workspace.sessionIds
+    if (props.sessionId !== undefined) {
+      const matchBySession = items.find(w => w.sessionIds?.includes(props.sessionId!))
+      if (matchBySession !== undefined) return matchBySession.workspaceId
+    }
+
+    // 2b. Match by workspace path
+    if (props.workspace !== undefined) {
+      const target = normalizeWorkspacePath(props.workspace)
+      const matchByPath = items.find(w => normalizeWorkspacePath(w.path) === target)
+      if (matchByPath !== undefined) return matchByPath.workspaceId
+    }
+
+    // 2c. Match by session cwd from sessions.list
+    if (props.sessionId !== undefined && props.sessions !== undefined) {
+      const sessionsSnapshot = (props.sessions as unknown as { list?: { getSnapshot(): { byId?: Record<string, { cwd?: string }> } } })
+        .list?.getSnapshot?.()
+      const cwd = sessionsSnapshot?.byId?.[props.sessionId]?.cwd
+      if (cwd !== undefined) {
+        const target = normalizeWorkspacePath(cwd)
+        const matchByCwd = items.find(w => normalizeWorkspacePath(w.path) === target)
+        if (matchByCwd !== undefined) return matchByCwd.workspaceId
+      }
+    }
+
+    // 2d. Match by active workspace root
+    const activeRoot = getActiveWorkspaceRoot()
+    if (activeRoot !== undefined) {
+      const target = normalizeWorkspacePath(activeRoot)
+      const matchByActive = items.find(w => normalizeWorkspacePath(w.path) === target)
+      if (matchByActive !== undefined) return matchByActive.workspaceId
+    }
+
+    // 2e. Match recentWorkspaceId
+    if (snapshot?.recentWorkspaceId !== undefined) {
+      const matchRecent = items.find(w => w.workspaceId === snapshot.recentWorkspaceId)
+      if (matchRecent !== undefined) return matchRecent.workspaceId
+    }
+
+    // 2f. If only one workspace exists, it is unambiguously that one
+    if (items.length === 1) {
+      return items[0]?.workspaceId
+    }
+  }
+
+  return undefined
 }
 
 /**
@@ -48,28 +150,61 @@ export async function rewindTurn(props: {
   workspaceIdOf?: (path: string) => string | undefined
 }): Promise<RewindOutcome> {
   const undoAnchorSeq = props.detail?.undoAnchorSeq
-  if (props.checkpointId === undefined) {
-    return { ok: false, reason: 'no-sessions', message: props.firstTurnText }
-  }
-  const restore = await callApi('/checkpoints/restore', {
-    body: { id: props.checkpointId, session: props.sessionId, confirm: true },
-  })
-  if (!restore.ok) return { ok: false, reason: 'restore-failed', message: restore.message }
+  const isFirstTurn = props.detail?.turn === 1 || (props.detail?.turn === undefined && undoAnchorSeq === undefined)
 
-  if (undoAnchorSeq === undefined) {
+  // Restore files if this turn had a checkpoint
+  if (props.checkpointId !== undefined) {
+    const restore = await callApi('/checkpoints/restore', {
+      body: { id: props.checkpointId, session: props.sessionId, confirm: true },
+    })
+    if (!restore.ok) return { ok: false, reason: 'restore-failed', message: restore.message }
+  }
+
+  if (isFirstTurn) {
     // First turn: cut nothing — arrive in a fresh session on the same project.
-    const workspaceId = props.workspace !== undefined ? props.workspaceIdOf?.(props.workspace) : undefined
+    const workspaceId = resolveWorkspaceId({
+      workspaces: props.workspaces,
+      sessions: props.sessions,
+      sessionId: props.sessionId,
+      workspace: props.workspace,
+      workspaceIdOf: props.workspaceIdOf,
+    })
+
     if (props.workspaces !== undefined && workspaceId !== undefined) {
       try {
         const childId = await props.workspaces.connectWorkspace(workspaceId)
         props.sessions.open(childId as never)
         return { ok: true, childId, fresh: true }
       } catch (startError: unknown) {
-        console.warn('[dsh-ext] starting the fresh session failed:', startError)
-        return { ok: false, reason: 'new-session-failed', message: startError instanceof Error ? startError.message : String(startError) }
+        console.warn('[dsh-ext] starting the fresh session via connectWorkspace failed:', startError)
       }
     }
+
+    // Fallback: create session directly via sessions.create
+    if (props.sessions !== undefined) {
+      try {
+        const sessionsSnapshot = (props.sessions as unknown as { list?: { getSnapshot(): { byId?: Record<string, { cwd?: string }> } } })
+          .list?.getSnapshot?.()
+        const cwd = props.workspace ?? sessionsSnapshot?.byId?.[props.sessionId]?.cwd
+        const createOpts = workspaceId !== undefined
+          ? { workspaceId }
+          : cwd !== undefined
+            ? { cwd }
+            : {}
+        const childId = await (props.sessions as unknown as { create(opts?: unknown): Promise<string> }).create(createOpts)
+        props.sessions.open(childId as never)
+        return { ok: true, childId, fresh: true }
+      } catch (createError: unknown) {
+        console.warn('[dsh-ext] creating fresh session via sessions.create failed:', createError)
+        return { ok: false, reason: 'new-session-failed', message: createError instanceof Error ? createError.message : String(createError) }
+      }
+    }
+
     return { ok: false, reason: 'first-turn', message: props.firstTurnText }
+  }
+
+  if (undoAnchorSeq === undefined) {
+    return { ok: false, reason: 'fork-failed', message: props.firstTurnText }
   }
 
   try {
@@ -96,7 +231,11 @@ export async function resendEditedQuestion(
   childId: string,
   text: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  const binding = sessions.binding(childId as never)
+  let binding = sessions.binding(childId as never)
+  if (binding?.session === undefined) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+    binding = sessions.binding(childId as never)
+  }
   const sent = await binding?.session
     .prompt([{ type: 'text', text }], 'queue')
     .catch((promptError: unknown) => {

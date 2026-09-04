@@ -124,7 +124,7 @@ const storeBundle = join(process.cwd(), 'lib', 'checkpoint-store.verify.mjs')
 const verifyEntry = join(process.cwd(), 'src', 'checkpoints.verify.entry.ts')
 writeFileSync(verifyEntry, [
   "export { CheckpointStore } from './checkpoint-store.ts'",
-  "export { liveSessionCwd, turnForMessageEvents, messagePositionOfEvents, turnContextOfEvents } from './features/checkpoints.ts'",
+  "export { liveSessionCwd, turnForMessageEvents, messagePositionOfEvents, turnContextOfEvents, seqTurnOfEvents } from './features/checkpoints.ts'",
   "export { DEFAULT_CHECKPOINT_EXCLUDES } from './config.ts'",
 ].join(String.fromCharCode(10)))
 await build({
@@ -136,7 +136,7 @@ await build({
   packages: 'external',
   logLevel: 'error',
 })
-const { CheckpointStore, DEFAULT_CHECKPOINT_EXCLUDES, liveSessionCwd, turnForMessageEvents, messagePositionOfEvents, turnContextOfEvents } = await import(pathToFileURL(storeBundle).href)
+const { CheckpointStore, DEFAULT_CHECKPOINT_EXCLUDES, liveSessionCwd, turnForMessageEvents, messagePositionOfEvents, turnContextOfEvents, seqTurnOfEvents } = await import(pathToFileURL(storeBundle).href)
 rmSync(verifyEntry, { force: true })
 
 // The excludes and cap the plugin actually ships with, so this exercises the
@@ -197,6 +197,10 @@ report('the first turn keeps its own question', turnOne.question === 'first ques
 report('the second turn keeps its own question', turnTwo.question === 'second question')
 report('questions never leak across turns', turnTwo.question !== 'first question')
 report('a missing turn has no question', turnContextOfEvents(turnLog, 9).question === undefined)
+const seqOne = seqTurnOfEvents(turnLog, 2)
+const seqTwo = seqTurnOfEvents(turnLog, 6)
+report('seqTurnOfEvents maps turn 1 message correctly', seqOne?.turn === 1 && seqOne?.undoAnchorSeq === undefined && seqOne?.question === 'first question')
+report('seqTurnOfEvents maps turn 2 message to turn 1 end anchor', seqTwo?.turn === 2 && seqTwo?.undoAnchorSeq === 4 && seqTwo?.question === 'second question')
 process.stdout.write('\n')
 
 process.stdout.write('Taking checkpoint 1…\n')

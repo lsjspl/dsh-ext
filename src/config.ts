@@ -75,6 +75,26 @@ export interface ExplorerConfig {
   defaultOpen: boolean
   respectGitignore: boolean
   maxEntriesPerDir: number
+  openLinksInPanel: boolean
+}
+
+export type GitCommitStyle = 'conventional' | 'simple' | 'detailed'
+export type GitCommitLanguage = 'zh-CN' | 'en' | 'auto'
+export type GitSessionBindingMode = 'strict' | 'prompt' | 'off'
+
+export interface GitConfig {
+  enabled: boolean
+  provider: string
+  model: string
+  commitStyle: GitCommitStyle
+  commitLanguage: GitCommitLanguage
+  autoStageAll: boolean
+  sessionBinding: GitSessionBindingMode
+  autoAlignBranch: boolean
+  worktreeDirPattern: string
+  worktreeAutoRegister: boolean
+  pushAutoSetUpstream: boolean
+  pushTimeoutSeconds: number
 }
 
 export interface SessionAdminConfig {
@@ -102,6 +122,7 @@ export interface Config {
   deepseekBalance: DeepseekBalanceConfig
   commandReview: CommandReviewConfig
   explorer: ExplorerConfig
+  git: GitConfig
   sessionAdmin: SessionAdminConfig
   pluginSafety: PluginSafetyConfig
   checkpoints: CheckpointsConfig
@@ -213,7 +234,7 @@ export const Config: z<Config> = z.object({
     absoluteDenyDelete: z.boolean().default(true).description('Deny recognized deletion operations immediately, without model or human review.'),
     deletePatterns: z.array(z.string()).default([...DEFAULT_DELETE_PATTERNS]).description('Regular expressions matched against tool name plus command/arguments to recognize deletion operations.'),
     provider: z.string().default('deepseek-official').description('Provider route the reviewer model runs on.'),
-    model: z.string().default('deepseek-v4-flash').description('Reviewer model id.'),
+    model: z.string().default('deepseek-chat').description('Reviewer model id.'),
     timeoutMs: z.number().step(1).min(1000).max(120000).default(20000).description('Reviewer deadline.'),
     onFailure: z.union([
       z.const('ask').description('Escalate to the user (fail-safe).'),
@@ -230,6 +251,34 @@ export const Config: z<Config> = z.object({
     defaultOpen: z.boolean().default(false),
     respectGitignore: z.boolean().default(true).description('Hide ignored files from the directory tree.'),
     maxEntriesPerDir: z.number().step(1).min(50).max(5000).default(500).description('Cap on entries returned for one directory.'),
+    openLinksInPanel: z.boolean().default(true).description('Open file links from chat and tool cards in the side panel.'),
+  }),
+
+  git: z.object({
+    enabled: z.boolean().default(true).description('Git 提交推送、分支与工作区管理功能'),
+    provider: z.string().default('').description('AI 生成 Commit 使用的提供商，留空则跟随当前会话模型'),
+    model: z.string().default('').description('AI 生成 Commit 使用的模型，留空则跟随当前会话模型'),
+    commitStyle: z.union([
+      z.const('conventional').description('Conventional Commits (feat/fix 规范)'),
+      z.const('simple').description('单行简要风格'),
+      z.const('detailed').description('详尽列表风格'),
+    ]).default('conventional'),
+    commitLanguage: z.union([
+      z.const('zh-CN').description('简体中文'),
+      z.const('en').description('English'),
+      z.const('auto').description('跟随界面语言'),
+    ]).default('zh-CN'),
+    autoStageAll: z.boolean().default(true).description('无暂存文件时，生成提交或提交时自动暂存全部改动'),
+    sessionBinding: z.union([
+      z.const('strict').description('严格模式：创建会话绑定分支且会话内锁定'),
+      z.const('prompt').description('提示模式：新建会话提示绑定，允许按需解锁'),
+      z.const('off').description('自由模式：不限制会话与分支绑定'),
+    ]).default('strict'),
+    autoAlignBranch: z.boolean().default(true).description('切换会话时自动将底层仓库对齐到该会话绑定的分支'),
+    worktreeDirPattern: z.string().default('../{repo}-{branch}').description('新建 Worktree 目录的默认命名规则'),
+    worktreeAutoRegister: z.boolean().default(true).description('创建 Worktree 后自动注册为 DSH 独立工作空间'),
+    pushAutoSetUpstream: z.boolean().default(true).description('推送无上游分支时自动执行 --set-upstream'),
+    pushTimeoutSeconds: z.number().step(5).min(10).max(300).default(60).description('Git 推送超时时间（秒）'),
   }),
 
   sessionAdmin: z.object({
@@ -298,6 +347,21 @@ export const DEFAULT_CONFIG: Config = {
     defaultOpen: false,
     respectGitignore: true,
     maxEntriesPerDir: 500,
+    openLinksInPanel: true,
+  },
+  git: {
+    enabled: true,
+    provider: '',
+    model: '',
+    commitStyle: 'conventional',
+    commitLanguage: 'zh-CN',
+    autoStageAll: true,
+    sessionBinding: 'strict',
+    autoAlignBranch: true,
+    worktreeDirPattern: '../{repo}-{branch}',
+    worktreeAutoRegister: true,
+    pushAutoSetUpstream: true,
+    pushTimeoutSeconds: 60,
   },
   sessionAdmin: {
     enabled: true,

@@ -4,13 +4,13 @@ import { useResource } from './use-resource.ts'
 import { INDENT, Notice, rowStyle, token, buttonStyle } from './ui.tsx'
 import { useT } from './use-locale.ts'
 import { FileIcon, FolderIcon } from './file-icons.tsx'
-import { ChevronIcon, CloseIcon, CopyIcon, CheckIcon, FilesIcon, GitIcon, PlusIcon, VscodeIcon, IdeaIcon, FolderIcon as FolderGlyph, iconButtonStyle } from './icons.tsx'
+import { ChevronIcon, CloseIcon, CopyIcon, CheckIcon, FilesIcon, GitIcon, LockIcon, PlusIcon, VscodeIcon, IdeaIcon, FolderIcon as FolderGlyph, iconButtonStyle } from './icons.tsx'
 import { useTabs, bindPanelTabs, type Tab, type TabKind } from './tabs.ts'
 import { setPanelOpen } from './panel-state.ts'
 import { callApi } from './api.ts'
 import { CodeView, DiffView } from './DiffView.tsx'
 import { ReviewView } from './ReviewView.tsx'
-import { API_PREFIX, type ExplorerStatus, type FileView, type OpenEditorResult, type TreeEntry } from '../shared/api-contract.ts'
+import { API_PREFIX, type ExplorerStatus, type FileView, type OpenEditorResult, type TreeEntry, type SessionBindingResult } from '../shared/api-contract.ts'
 
 /**
  * Feature 5 — the project explorer: a tabbed panel holding the workspace's file
@@ -201,7 +201,8 @@ function formatSize(bytes: number | undefined): string {
 
 /** The last path segment — what an editor tab is labelled with. */
 function baseOf(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1)
+  const lastSlash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return path.slice(lastSlash + 1)
 }
 
 /** Secondary text: row sizes, meta beside a title. */
@@ -817,6 +818,12 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
     return () => { window.clearInterval(timer) }
   }, [query])
 
+  const binding = useResource<SessionBindingResult>(
+    props.sessionId ? `/explorer/git/session-binding?session=${encodeURIComponent(props.sessionId)}` : '/explorer/git/session-binding',
+    Boolean(props.sessionId)
+  )
+  const isLocked = binding.data?.binding?.locked === true
+
   return (
     <div data-dsh-plugin="dsh-ext" data-dsh-part="explorer" style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'space-between' }}>
@@ -830,24 +837,27 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 0 auto' }}>
           {status.data?.branch !== undefined && (
             <div
-              title={`Git branch: ${status.data.branch}`}
+              title={t('git.sessionLockedTooltip', { branch: status.data.branch })}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 4,
                 fontSize: 12,
                 fontFamily: 'ui-monospace, monospace',
-                color: token.textMuted,
+                color: token.text,
                 background: 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.08))',
-                border: `1px solid ${token.border}`,
+                border: '1px solid rgba(234, 179, 8, 0.35)',
                 borderRadius: 12,
-                padding: '3px 8px',
+                padding: '2px 8px',
                 flex: '0 0 auto',
                 lineHeight: '18px',
+                cursor: 'default',
+                userSelect: 'none',
               }}
             >
               <GitIcon size={13} />
-              <span style={{ maxWidth: 88, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <LockIcon size={11} style={{ color: token.warn }} />
+              <span style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {status.data.branch}
               </span>
               {(status.data.ahead ?? 0) > 0 && <span style={{ color: token.success }}>↑{status.data.ahead}</span>}
@@ -904,7 +914,19 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
           {active?.kind === 'review' && (
             status.data === undefined
               ? <div style={{ fontSize: 12, color: token.textMuted, padding: '16px 8px', textAlign: 'center' }}>{t('common.loading')}</div>
-              : <ReviewView status={status.data} onOpenDiff={(path) => { openPanelTab('diff', path) }} />
+              : (
+                <ReviewView
+                  status={status.data}
+                  workspaceRoot={status.data?.root}
+                  sessionId={props.sessionId}
+                  scope={scope}
+                  onReload={() => {
+                    status.reload()
+                    binding.reload?.()
+                  }}
+                  onOpenDiff={(path) => { openPanelTab('diff', path) }}
+                />
+              )
           )}
           {active?.kind === 'files' && (
             <FilesView

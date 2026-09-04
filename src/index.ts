@@ -8,6 +8,7 @@ import { settingsRoutes } from './features/settings-api.ts'
 import { balanceRoutes } from './features/deepseek-balance.ts'
 import { mountCommandReview } from './features/command-review.ts'
 import { mountExplorer } from './features/explorer.ts'
+import { mountGitOps } from './features/git-ops.ts'
 import { mountSessionAdmin } from './features/session-admin.ts'
 import { mountPluginSafety } from './features/plugin-safety.ts'
 import { mountCheckpoints } from './features/checkpoints.ts'
@@ -73,6 +74,11 @@ export function apply(ctx: Context, entry: Config): void {
       id: 'explorer',
       enabled: config => config.explorer.enabled,
       mount: () => mountExplorer(ctx, settings.current, routes),
+    },
+    {
+      id: 'gitOps',
+      enabled: config => config.git.enabled && config.explorer.enabled,
+      mount: () => mountGitOps(ctx, settings.current, routes, paths.gitBindings),
     },
     {
       id: 'sessionAdmin',

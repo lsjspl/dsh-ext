@@ -87,6 +87,35 @@ export function FilesIcon(props: IconProps) {
   )
 }
 
+/** A flat list icon: three horizontal lines with bullets, for "View as List". */
+export function ListFlatIcon(props: IconProps) {
+  const size = props.size ?? 16
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true" style={props.style}>
+      <circle cx="3" cy="4" r="1.2" fill="currentColor" />
+      <path d="M6 4H13.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="3" cy="8" r="1.2" fill="currentColor" />
+      <path d="M6 8H13.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="3" cy="12" r="1.2" fill="currentColor" />
+      <path d="M6 12H13.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** A tree hierarchy icon: a root item and indented branches, for "View as Tree". */
+export function ListTreeIcon(props: IconProps) {
+  const size = props.size ?? 16
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true" style={props.style}>
+      <path d="M3 3.5H13.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M4.5 5V12.5H7.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.5 8H7.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M8.5 8H13.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M8.5 12.5H13.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 /**
  * A disclosure chevron, rotated by `open`.
  *
@@ -309,3 +338,16 @@ export function CopyIcon(props: IconProps) {
     </svg>
   )
 }
+
+/** A lock icon, for branch-locked sessions. */
+export function LockIcon(props: IconProps) {
+  const size = props.size ?? 14
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true" style={props.style}>
+      <rect x="3" y="6.5" width="10" height="7.5" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M5.5 6.5V4.5C5.5 3.12 6.62 2 8 2C9.38 2 10.5 3.12 10.5 4.5V6.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="8" cy="10" r="1" fill="currentColor" />
+    </svg>
+  )
+}
+

@@ -145,9 +145,6 @@ export function seqTurnOfEvents(
   seq: number,
 ): { turn: number; closed: boolean; question: string | undefined; undoAnchorSeq: number | undefined } | undefined {
   let turn: number | undefined
-  let startSeq: number | undefined
-  let endSeq: number | undefined
-  let previousEndSeq: number | undefined
   for (const raw of events) {
     const event = raw as { type?: unknown; seq?: unknown; data?: { turn?: unknown } }
     const eventSeq = typeof event.seq === 'number' ? event.seq : undefined
@@ -156,35 +153,30 @@ export function seqTurnOfEvents(
       const candidate = typeof event.data?.turn === 'number' ? event.data.turn : undefined
       if (candidate !== undefined && (turn === undefined || candidate > turn)) {
         turn = candidate
-        startSeq = eventSeq
-        endSeq = undefined
       }
     }
-    if (event.type === 'turn/end' && eventSeq <= seq) {
-      const ended = typeof event.data?.turn === 'number' ? event.data.turn : undefined
-      if (ended !== undefined && turn !== undefined && ended === turn) endSeq = eventSeq
-      if (ended !== undefined && turn !== undefined && ended === turn - 1) previousEndSeq = eventSeq
+  }
+  if (turn === undefined) {
+    for (const raw of events) {
+      const event = raw as { type?: unknown; seq?: unknown; data?: { turn?: unknown } }
+      const eventSeq = typeof event.seq === 'number' ? event.seq : undefined
+      if (eventSeq === seq && typeof event.data?.turn === 'number') {
+        turn = event.data.turn
+        break
+      }
+      if (event.type === 'turn/start' && typeof event.data?.turn === 'number') {
+        turn = event.data.turn
+        break
+      }
     }
   }
   if (turn === undefined) return undefined
-  const windowEnd = endSeq ?? Number.MAX_SAFE_INTEGER
-  const parts: string[] = []
-  if (startSeq !== undefined) {
-    for (const raw of events) {
-      const event = raw as { type?: unknown; seq?: unknown; data?: { content?: unknown } }
-      if (event.type !== 'user/message') continue
-      const messageSeq = typeof event.seq === 'number' ? event.seq : undefined
-      if (messageSeq === undefined || messageSeq < startSeq || messageSeq > windowEnd) continue
-      const content = event.data?.content
-      if (Array.isArray(content)) for (const block of content) parts.push(blockText(block))
-    }
-  }
-  const question = parts.length > 0 ? parts.join('').trim() : undefined
+  const context = turnContextOfEvents(events, turn)
   return {
     turn,
-    closed: endSeq !== undefined,
-    question: question !== undefined && question.length > 0 ? question : undefined,
-    undoAnchorSeq: turn > 1 ? previousEndSeq : undefined,
+    closed: context.closed,
+    question: context.question,
+    undoAnchorSeq: context.undoAnchorSeq,
   }
 }
 
@@ -215,6 +207,18 @@ export function turnContextOfEvents(
     if (event.type === 'turn/start' && event.data?.turn === turn) startSeq = startSeq ?? seq
     if (event.type === 'turn/end' && event.data?.turn === turn) endSeq = seq
     if (event.type === 'turn/end' && event.data?.turn === turn - 1) previousEndSeq = seq
+  }
+  if (previousEndSeq === undefined && startSeq !== undefined && turn > 1) {
+    for (const raw of events) {
+      const event = raw as { type?: unknown; seq?: unknown }
+      const seq = typeof event.seq === 'number' ? event.seq : undefined
+      if (seq === undefined) continue
+      if (event.type === 'turn/end' && seq < startSeq) {
+        if (previousEndSeq === undefined || seq > previousEndSeq) {
+          previousEndSeq = seq
+        }
+      }
+    }
   }
   const closed = endSeq !== undefined
   const windowEnd = endSeq ?? Number.MAX_SAFE_INTEGER
@@ -562,7 +566,27 @@ export function mountCheckpoints(
       if (resolvedTurn === undefined) throw new ApiError(400, 'a turn number is required')
       const checkpointId = refs.get(resolvedTurn)
       if (checkpointId === undefined) {
-        return { turn: resolvedTurn, closed: true, question: undefined, undoAnchorSeq: undefined, checkpointId: undefined, workspace: workTree, files: [], added: 0, removed: 0 }
+        const payload = {
+          turn: resolvedTurn,
+          closed: true,
+          question: undefined as string | undefined,
+          undoAnchorSeq: undefined as number | undefined,
+          checkpointId: undefined,
+          workspace: workTree,
+          files: [],
+          added: 0,
+          removed: 0,
+        }
+        if (seqDetail.question !== undefined || seqDetail.undoAnchorSeq !== undefined || seqDetail.closed !== undefined) {
+          return { ...payload, ...seqDetail }
+        }
+        if (query.get('detail') !== '1') return payload
+
+        const persistence = ctx.get('sessionPersistence')
+        if (persistence === undefined) return payload
+        const inspection = await persistence.inspect(sessionId as never, controller.signal)
+        const context = turnContextOfEvents(inspection.events, payload.turn)
+        return { ...payload, closed: context.closed, question: context.question, undoAnchorSeq: context.undoAnchorSeq }
       }
 
       // CACHING FIX: Check cache before expensive turnChanges computation.

@@ -14,6 +14,8 @@ export interface PluginPaths {
   readonly auditLog: string
   /** Quarantined bundle list, shared with the `dsh-ext` rescue CLI. */
   readonly quarantine: string
+  /** Session to git branch/worktree bindings. */
+  readonly gitBindings: string
 }
 
 export function pluginPaths(): PluginPaths {
@@ -25,6 +27,7 @@ export function pluginPaths(): PluginPaths {
     checkpoints: join(activeRoot, 'checkpoints'),
     auditLog: join(activeRoot, 'command-review.jsonl'),
     quarantine: join(activeRoot, 'quarantine.json'),
+    gitBindings: join(activeRoot, 'session-git-bindings.json'),
   }
 }
 

@@ -20,6 +20,7 @@ import { SettingsPage } from './SettingsPage.tsx'
 import { TrashModal } from './TrashModal.tsx'
 import { TurnChangesCard, CardBoundary } from './TurnChangesCard.tsx'
 import { UserEditBubble } from './UserEditBubble.tsx'
+import type { WorkspacesFace } from './rewind.ts'
 import { ComposerImages } from './ComposerImages.tsx'
 import { SidePanel } from './SidePanel.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
@@ -27,17 +28,25 @@ import { BalanceBadge } from './BalanceView.tsx'
 import { hasImagePicker, openImagePicker, subscribeImagePicker } from './picker-channel.ts'
 import { DICTS, LOCALE_NS } from './locales.ts'
 import { provideLocale, translate, useT } from './use-locale.ts'
-import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, ShieldCheckIcon, VscodeIcon, FolderIcon, IdeaIcon, TrashIcon, iconButtonStyle } from './icons.tsx'
+import { PanelLeftIcon, PanelRightIcon, PaperclipIcon, ShieldCheckIcon, VscodeIcon, FolderIcon, IdeaIcon, TrashIcon, GitIcon, LockIcon, iconButtonStyle } from './icons.tsx'
 import { Toast, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { callApi } from './api.ts'
+import { useResource } from './use-resource.ts'
+import { ComposerGitControls, HeroGitControls } from './ComposerGitBar.tsx'
 import { setPanelOpen, setPanelSession, usePanelOpen } from './panel-state.ts'
 import { useActiveWorkspace, type WorkspacesHook } from './use-workspace.ts'
 import { mutateClientConfig, readClientConfig, useClientConfig } from './use-client-config.ts'
 import { useConfig } from './use-config.ts'
 import { token } from './ui.tsx'
-import type { OpenEditorResult } from '../shared/api-contract.ts'
+import type { OpenEditorResult, ExplorerStatus, SessionBindingResult } from '../shared/api-contract.ts'
+import { installFileLinkInterceptor } from './file-link-interceptor.ts'
 
 export const name = 'dsh-ext-client'
+
+let clientCtx: Context | undefined
+export function getClientContext(): Context | undefined {
+  return clientCtx
+}
 /**
  * Only `slots` is declared here — every seat this plugin takes goes through it.
  *
@@ -88,6 +97,7 @@ function trySlot(label: string, register: () => void): void {
 }
 
 export function apply(ctx: Context): void {
+  clientCtx = ctx
   // Copy first: every surface below reads it, and a late dictionary would show
   // raw keys on first paint.
   installLocale(ctx)
@@ -113,7 +123,9 @@ export function apply(ctx: Context): void {
   registerSidePanel(ctx)
   registerExplorerToggles(ctx)
   registerOpenEditorLauncher(ctx)
+  registerGitBranchComposer(ctx)
   registerRecycleBin(ctx)
+  installFileLinkInterceptor(ctx)
 }
 
 /**
@@ -460,31 +472,77 @@ function registerBalanceBadge(ctx: Context): void {
             document.querySelectorAll('[data-has-balance-badge]').forEach(el => {
               el.removeAttribute('data-has-balance-badge')
             })
+            document.querySelectorAll('[data-has-git-controls]').forEach(el => {
+              el.removeAttribute('data-has-git-controls')
+            })
           }
         }, [findCard])
 
-        if (config?.deepseekBalance.enabled !== true || !config.deepseekBalance.headerBadge) return null
+        const showGit = config?.git.enabled === true
+        const balanceConfigActive = config?.deepseekBalance.enabled === true && config.deepseekBalance.headerBadge
 
-        // Determine if the current session model is from the official DeepSeek route.
-        // Only official DeepSeek routes (e.g. 'deepseek-official', 'deepseek') report the official balance.
-        // Third-party (pi-ai) routes have their own providers (e.g. 'leifeng', 'openai', etc.) and should NOT show the badge.
-        const storeProvider = modelSnap?.current?.provider
-        const domProvider = cardEl?.querySelector('[data-dsh-part="model-picker"]')?.getAttribute('data-provider')
-        const activeProvider = (storeProvider && storeProvider.length > 0) ? storeProvider : domProvider
+        let showBalance = balanceConfigActive
+        if (showBalance) {
+          const storeProvider = modelSnap?.current?.provider
+          const domProvider = cardEl?.querySelector('[data-dsh-part="model-picker"]')?.getAttribute('data-provider')
+          const activeProvider = (storeProvider && storeProvider.length > 0) ? storeProvider : domProvider
 
-        if (activeProvider !== undefined && activeProvider !== null && activeProvider.length > 0) {
-          const normalized = activeProvider.toLowerCase().trim()
-          const isOfficial = normalized === 'deepseek-official' || normalized === 'deepseek'
-          if (!isOfficial) {
-            cardEl?.removeAttribute('data-has-balance-badge')
-            return null
+          if (activeProvider !== undefined && activeProvider !== null && activeProvider.length > 0) {
+            const normalized = activeProvider.toLowerCase().trim()
+            const isOfficial = normalized === 'deepseek-official' || normalized === 'deepseek'
+            if (!isOfficial) {
+              showBalance = false
+            }
           }
         }
+
+        if (!showGit && !showBalance) {
+          cardEl?.removeAttribute('data-has-balance-badge')
+          return null
+        }
+
+        if (showGit) {
+          cardEl?.setAttribute('data-has-git-controls', 'true')
+        } else {
+          cardEl?.removeAttribute('data-has-git-controls')
+        }
+
+        // Accurately determine if the UI is in the Hero / New Session phase
+        const isHero = Boolean(
+          cardEl?.closest('[data-phase="hero"]') ||
+          document.querySelector('[data-phase="hero"]') ||
+          document.querySelector('[class*="heroWorkspaceRow"]')
+        )
+        const effectiveGitSessionId = isHero ? undefined : currentSessionId
 
         return (
           <>
             <span ref={setAnchor} style={{ display: 'none' }} />
-            {cardEl && cardEl.isConnected ? createPortal(<BalanceBadge cardEl={cardEl} />, cardEl) : null}
+            {cardEl && cardEl.isConnected ? createPortal(
+              <div
+                data-dsh-plugin="dsh-ext"
+                data-dsh-part="composer-top-bar"
+                style={{
+                  position: 'absolute',
+                  top: 7,
+                  left: 12,
+                  right: 12,
+                  zIndex: 5,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  pointerEvents: 'none',
+                }}
+              >
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, pointerEvents: 'auto' }}>
+                  {showGit && <ComposerGitControls sessionId={effectiveGitSessionId} />}
+                </div>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, pointerEvents: 'auto' }}>
+                  {showBalance && <BalanceBadge cardEl={cardEl} inline />}
+                </div>
+              </div>,
+              cardEl
+            ) : null}
           </>
         )
       }))
@@ -607,7 +665,7 @@ function registerUserEditBubbles(ctx: Context): void {
   trySlot('user message edit bubble', () => {
     ctx.inject(['slots', 'sessions', 'workspaces'], (scope: Context) => {
       const sessions = scope.sessions as unknown as ISessions
-      const workspaces = scope.workspaces as unknown as { connectWorkspace(workspaceId: string): Promise<string>; archiveSession(sessionId: string): Promise<void> }
+      const workspaces = scope.workspaces as unknown as WorkspacesFace & { archiveSession(sessionId: string): Promise<void> }
       scope.slots.inject('conversation.chat.node', () => scope.slots.register({
         name: 'conversation.chat.node',
         key: 'user',
@@ -643,7 +701,7 @@ function registerTurnChangesCards(ctx: Context): void {
   trySlot('turn changes card', () => {
     ctx.inject(['slots', 'sessions', 'workspaces'], (scope: Context) => {
       const sessions = scope.sessions as unknown as ISessions
-      const workspaces = scope.workspaces as unknown as { connectWorkspace(workspaceId: string): Promise<string>; archiveSession(sessionId: string): Promise<void> }
+      const workspaces = scope.workspaces as unknown as WorkspacesFace & { archiveSession(sessionId: string): Promise<void> }
       // Module-level cache for the last valid turn per sessionId, so transient
       // undefined turn values during navigation don't unmount the card.
       const lastTurn = new Map<string, { turn: number; status: 'open' | 'closed' | 'unknown' }>()
@@ -970,6 +1028,26 @@ function registerOpenEditorLauncher(ctx: Context): void {
           )}
         </>
       )
+    }))
+  })
+}
+
+
+/**
+ * Git Branch & Worktree selector in composer tool row (`conversation.input.left`).
+ * Always visible on new-session blank screen and during conversations.
+ * Also portals a companion chip into heroWorkspaceRow on the new-session screen!
+ */
+function registerGitBranchComposer(ctx: Context): void {
+  trySlot('git branch composer', () => {
+    ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+      name: 'conversation.input.left',
+      id: 'dsh-ext-git-branch-composer',
+      order: 10,
+      registrant: 'dsh-ext',
+    }, function DevToolGitBranchComposer() {
+      // Unified in composer-top-bar (beside balance badge); no duplicate row
+      return null
     }))
   })
 }

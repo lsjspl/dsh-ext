@@ -47,6 +47,16 @@ export type WorkspacesHook = <T>(select: (state: WorkspaceListSnapshot) => T) =>
  * play (that session's own `cwd`), so a wrong hint here would override a right
  * answer there.
  */
+let currentWorkspaceRoot: string | undefined
+
+export function setActiveWorkspaceRoot(root: string | undefined): void {
+  currentWorkspaceRoot = root
+}
+
+export function getActiveWorkspaceRoot(): string | undefined {
+  return currentWorkspaceRoot
+}
+
 export function useActiveWorkspace(useWorkspaces: WorkspacesHook | undefined): string | undefined {
   // Two calls into one selector: the hook is only legal to call during render,
   // and calling it conditionally would break the hook order the moment a
@@ -61,7 +71,10 @@ export function useActiveWorkspace(useWorkspaces: WorkspacesHook | undefined): s
     const only = state.items.length === 1 ? state.items[0] : undefined
     return (match ?? only)?.path
   })
-  return selected ?? undefined
+  if (selected !== undefined) {
+    currentWorkspaceRoot = selected
+  }
+  return selected ?? currentWorkspaceRoot
 }
 
 /**

@@ -179,7 +179,12 @@ function injectBadgeStyles(): void {
 }
 
 [data-composer-card][data-has-balance-badge] [data-input-scroll] {
-  padding-right: 120px !important;
+  padding-top: 32px !important;
+  padding-right: 130px !important;
+}
+
+[data-composer-card][data-has-git-controls] [data-input-scroll] {
+  padding-top: 32px !important;
 }
 `
   document.head.appendChild(style)
@@ -310,7 +315,7 @@ try {
  * off-peak marker beside the amount, and a shake-and-float "damage" effect
  * whenever the balance drops between polls.
  */
-export function BalanceBadge(props: { cardEl?: HTMLElement | null }) {
+export function BalanceBadge(props: { cardEl?: HTMLElement | null; inline?: boolean }) {
   const t = useT()
   injectBadgeStyles()
   const config = useClientConfig()
@@ -527,18 +532,21 @@ export function BalanceBadge(props: { cardEl?: HTMLElement | null }) {
       onClick={handleBadgeClick}
       className={shakeClass}
       style={{
-        position: 'absolute',
-        top: 10,
-        right: 14,
-        zIndex: 4,
+        position: props.inline ? 'relative' : 'absolute',
+        top: props.inline ? undefined : 8,
+        right: props.inline ? undefined : 14,
+        zIndex: props.inline ? undefined : 4,
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        fontSize: 11.5,
-        fontFamily: 'ui-monospace, monospace',
-        padding: '2px 8px',
-        borderRadius: 12,
-        lineHeight: '16px',
+        height: 28,
+        boxSizing: 'border-box',
+        fontSize: 12,
+        fontWeight: 500,
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+        padding: '0 10px',
+        borderRadius: 14,
+        lineHeight: '20px',
         background: isHurt
           ? 'rgba(239, 68, 68, 0.12)'
           : 'var(--dsw-alias-bg-layer-2, rgba(125, 125, 125, 0.12))',

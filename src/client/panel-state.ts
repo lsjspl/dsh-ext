@@ -80,6 +80,11 @@ export function setPanelSession(next: string | undefined): void {
   for (const listener of [...sessionListeners]) listener()
 }
 
+/** Get the session on screen synchronously. */
+export function getPanelSession(): string | undefined {
+  return sessionId
+}
+
 /** The session on screen, or undefined before a session-scoped seat has rendered. */
 export function usePanelSession(): string | undefined {
   const [, bump] = useState(0)
