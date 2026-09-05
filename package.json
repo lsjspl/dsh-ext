@@ -1,6 +1,6 @@
 {
   "name": "dsh-ext",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "DeepSeek Harness plugin: composer image picker with drag-reorder, reasoning-effort editor for third-party providers, DeepSeek balance, LLM command review, project explorer sidebar, session delete with trash, plugin safe-mode rescue CLI, and shadow-git session checkpoints.",
   "keywords": [
     "dsh",
