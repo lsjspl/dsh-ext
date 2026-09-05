@@ -11,9 +11,13 @@ import {
   DEFAULT_CONFIG,
   DEFAULT_DELETE_PATTERNS,
   DEFAULT_READ_PATTERNS,
+  effectiveDeletePolicy,
+  usesReviewModel,
+  reviewFollowsSession,
   type Config,
   type CommandReviewFallback,
   type CommandReviewMode,
+  type CommandPolicy,
   type GitCommitStyle,
   type GitCommitLanguage,
   type GitSessionBindingMode,
@@ -256,30 +260,6 @@ function TabStrip(props: { active: Tab; onSelect: (tab: Tab) => void }) {
 }
 
 
-/**
- * 匹配官方 DeepSeek Flash 模型：
- * 1. 提供方为官方 (provider.includes('deepseek') 或 provider === 'deepseek-official')
- * 2. 模型 ID 开头必定是 deepseek
- * 3. 模型 ID 包含 flash
- * 4. 若有多个匹配，按最小匹配（字符长度最短的那个，如 deepseek-v4-flash < deepseek-v4-flash-version）
- */
-function findDefaultOfficialFlash(models: readonly { provider: string; model: string; name: string }[]): { provider: string; model: string } | undefined {
-  const matched = models.filter(m => {
-    const p = m.provider.toLowerCase()
-    const id = m.model.toLowerCase()
-    const isOfficial = p === 'deepseek-official' || p.includes('deepseek')
-    const isDeepSeekPrefix = id.startsWith('deepseek')
-    const hasFlash = id.includes('flash')
-    return isOfficial && isDeepSeekPrefix && hasFlash
-  })
-
-  if (matched.length === 0) return undefined
-  matched.sort((a, b) => a.model.length - b.model.length)
-  const first = matched[0]
-  if (!first) return undefined
-  return { provider: first.provider, model: first.model }
-}
-
 export function SettingsPage() {
   const t = useT()
   const { view, error, busy, set, setMany } = useConfig()
@@ -299,24 +279,6 @@ export function SettingsPage() {
   // by the review tab: one dropdown over every model the live routes advertise.
   const reviewModels = useResource<ReviewModels>('/review/models')
 
-  // 当可用模型列表加载后，若当前配置不在列表中，自动最小匹配官方 deepseek flash
-  useLayoutEffect(() => {
-    if (view && reviewModels.data?.models && reviewModels.data.models.length > 0) {
-      const currentValid = reviewModels.data.models.some(
-        m => m.provider === view.value.commandReview.provider && m.model === view.value.commandReview.model
-      )
-      if (!currentValid) {
-        const best = findDefaultOfficialFlash(reviewModels.data.models)
-        if (best) {
-          setMany([
-            { path: ['commandReview', 'provider'], value: best.provider },
-            { path: ['commandReview', 'model'], value: best.model },
-          ])
-        }
-      }
-    }
-  }, [view, reviewModels.data?.models])
-
   if (view === undefined) {
     return (
       <div style={{ padding: 16, fontSize: 13, color: token.textMuted }}>
@@ -327,38 +289,30 @@ export function SettingsPage() {
 
   const c = view.value
   const disabled = busy || !view.writable
-  const currentModelKey = `${c.commandReview.provider}::${c.commandReview.model}`
+  const currentModelKey = reviewFollowsSession(c.commandReview) ? '' : `${c.commandReview.provider}::${c.commandReview.model}`
+  const commandPolicyOptions: { value: CommandPolicy; label: string }[] = [
+    { value: 'deny', label: t('review.commandPolicy.deny') },
+    { value: 'ask', label: t('review.commandPolicy.ask') },
+    { value: 'expected', label: t('review.commandPolicy.expected') },
+    { value: 'allow', label: t('review.commandPolicy.allow') },
+  ]
 
 
   const resetSection = (key: keyof Config) => {
     if (disabled) return
     const defaults = { ...DEFAULT_CONFIG[key] }
-    if (key === 'commandReview' && reviewModels.data?.models) {
-      const best = findDefaultOfficialFlash(reviewModels.data.models)
-      if (best) {
-        ;(defaults as any).provider = best.provider
-        ;(defaults as any).model = best.model
-      }
-    }
     const ops: ConfigOp[] = Object.entries(defaults).map(([subKey, value]) => ({
       path: [key, subKey],
       value,
     }))
+    if (key === 'commandReview') ops.push({ path: ['commandReview', 'deletePolicy'], value: effectiveDeletePolicy(DEFAULT_CONFIG.commandReview) })
     setMany(ops)
   }
 
   // 1. 审核模式与模型策略（分组 1）独立重置
   const resetReviewModeAndModel = () => {
     if (disabled) return
-    let provider = DEFAULT_CONFIG.commandReview.provider
-    let model = DEFAULT_CONFIG.commandReview.model
-    if (reviewModels.data?.models) {
-      const best = findDefaultOfficialFlash(reviewModels.data.models)
-      if (best) {
-        provider = best.provider
-        model = best.model
-      }
-    }
+    const { provider, model } = DEFAULT_CONFIG.commandReview
     setMany([
       { path: ['commandReview', 'enabled'], value: DEFAULT_CONFIG.commandReview.enabled },
       { path: ['commandReview', 'autoReview'], value: DEFAULT_CONFIG.commandReview.autoReview },
@@ -375,7 +329,8 @@ export function SettingsPage() {
     if (disabled) return
     setMany([
       { path: ['commandReview', 'writeOnly'], value: DEFAULT_CONFIG.commandReview.writeOnly },
-      { path: ['commandReview', 'absoluteDenyDelete'], value: DEFAULT_CONFIG.commandReview.absoluteDenyDelete },
+      { path: ['commandReview', 'deletePolicy'], value: effectiveDeletePolicy(DEFAULT_CONFIG.commandReview) },
+      { path: ['commandReview', 'gitPushPolicy'], value: DEFAULT_CONFIG.commandReview.gitPushPolicy },
       { path: ['commandReview', 'tools'], value: [...DEFAULT_CONFIG.commandReview.tools] },
     ])
   }
@@ -627,20 +582,25 @@ export function SettingsPage() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
                 {([
                   {
+                    value: 'expected' as const,
+                    title: t('review.mode.expected.label'),
+                    desc: t('review.mode.expected.hint'),
+                    tag: t('review.mode.default'),
+                  },
+                  {
                     value: 'rules+llm' as const,
-                    title: '规则初筛 + 模型复审',
-                    desc: '先用本地轻量正则规则秒级初筛，命中可疑指令后再交给大模型深度分析判定。兼顾高安全性与低 API 消耗。',
-                    tag: '推荐',
+                    title: t('review.mode.rules+llm.label'),
+                    desc: t('review.mode.rules+llm.hint'),
                   },
                   {
                     value: 'rules-only' as const,
-                    title: '仅本地规则拦截',
-                    desc: '纯离线阻断。完全依据本地正则表达式黑白名单进行拦截或放行，不调用任何第二模型，零额外 Token 消耗、零延迟。',
+                    title: t('review.mode.rules-only.label'),
+                    desc: t('review.mode.rules-only.hint'),
                   },
                   {
                     value: 'all' as const,
-                    title: '全量模型审查',
-                    desc: '最高防护级别。将覆盖范围内的每一个工具调用无差别提交给大模型进行语义审核裁决，适合极其严苛的安全场景。',
+                    title: t('review.mode.all.label'),
+                    desc: t('review.mode.all.hint'),
                   },
                 ]).map(m => {
                   const isSelected = c.commandReview.mode === m.value
@@ -699,7 +659,7 @@ export function SettingsPage() {
               </div>
             </div>
 
-            {c.commandReview.mode !== 'rules-only' && (
+            {usesReviewModel(c.commandReview) && (
               <>
                 <Row
                   label={t('review.modelPick')} hint={t('review.modelPick.hint')}
@@ -742,7 +702,15 @@ export function SettingsPage() {
                         value={currentModelKey}
                         disabled={disabled || !c.commandReview.enabled}
                         onChange={next => {
+                          if (next === '') {
+                            setMany([
+                              { path: ['commandReview', 'provider'], value: '' },
+                              { path: ['commandReview', 'model'], value: '' },
+                            ])
+                            return
+                          }
                           const separator = next.indexOf('::')
+                          if (separator < 0) return
                           setMany([
                             { path: ['commandReview', 'provider'], value: next.slice(0, separator) },
                             { path: ['commandReview', 'model'], value: next.slice(separator + 2) },
@@ -750,6 +718,7 @@ export function SettingsPage() {
                         }}
                         width={220}
                         maxWidth="100%"
+                        options={[{ value: '', label: t('review.model.followSession') }]}
                         groups={groups}
                       />
                     )
@@ -839,9 +808,16 @@ export function SettingsPage() {
                 onChange={next => { set(['commandReview', 'writeOnly'], next) }} />}
             />
             <Row
-              label={t('review.absoluteDelete')} hint={t('review.absoluteDelete.hint')}
-              control={<Toggle label={t('review.absoluteDelete')} checked={c.commandReview.absoluteDenyDelete ?? true} disabled={disabled || !c.commandReview.enabled}
-                onChange={next => { set(['commandReview', 'absoluteDenyDelete'], next) }} />}
+              label={t('review.deleteCommand')} hint={t(`review.deletePolicy.${effectiveDeletePolicy(c.commandReview)}.hint`)}
+              control={<Select<CommandPolicy> label={t('review.deleteCommand')} value={effectiveDeletePolicy(c.commandReview)} disabled={disabled || !c.commandReview.enabled}
+                options={commandPolicyOptions} width={220} maxWidth="100%"
+                onChange={next => { set(['commandReview', 'deletePolicy'], next) }} />}
+            />
+            <Row
+              label={t('review.gitPushCommand')} hint={t(`review.gitPushPolicy.${c.commandReview.gitPushPolicy ?? 'expected'}.hint`)}
+              control={<Select<CommandPolicy> label={t('review.gitPushCommand')} value={c.commandReview.gitPushPolicy ?? 'expected'} disabled={disabled || !c.commandReview.enabled}
+                options={commandPolicyOptions} width={220} maxWidth="100%"
+                onChange={next => { set(['commandReview', 'gitPushPolicy'], next) }} />}
             />
             <Row
               label={t('review.tools')}
@@ -1026,7 +1002,7 @@ export function SettingsPage() {
                   <TextAreaField
                     label={t('review.deletePatterns')}
                     value={(c.commandReview.deletePatterns ?? DEFAULT_DELETE_PATTERNS).join('\n')}
-                    disabled={disabled || !c.commandReview.enabled || !(c.commandReview.absoluteDenyDelete ?? true)}
+                    disabled={disabled || !c.commandReview.enabled || effectiveDeletePolicy(c.commandReview) === 'allow'}
                     rows={6}
                     onCommit={next => {
                       set(['commandReview', 'deletePatterns'], next.split('\n').map(line => line.trim()).filter(Boolean))
@@ -1367,4 +1343,3 @@ export function SettingsPage() {
     </div>
   )
 }
-

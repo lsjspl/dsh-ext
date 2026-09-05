@@ -167,16 +167,17 @@ dsh-ext:
   commandReview:
     enabled: true
     autoReview: false
-    mode: rules+llm
+    mode: expected          # expected / rules+llm / rules-only / all
     tools:
       - bash
       - pwsh
       - run_command
     writeOnly: true
     # readPatterns / deletePatterns / denyPatterns 不配置时使用内置规则
-    absoluteDenyDelete: true
-    provider: deepseek-official
-    model: deepseek-v4-flash
+    deletePolicy: expected  # deny / ask / expected / allow
+    gitPushPolicy: expected # 推送独立于全局审核模式
+    provider: ""
+    model: ""
     timeoutMs: 20000
     onFailure: ask
     auditLimit: 500
@@ -243,18 +244,32 @@ dsh-ext:
 | `deepseekBalance.peakWeekdaysOnly` | `boolean` | `true` | 周末是否全天按低谷计费 |
 | `commandReview.enabled` | `boolean` | `true` | 是否启用高危命令审核 |
 | `commandReview.autoReview` | `boolean` | `false` | 会话中是否自动执行审核 |
-| `commandReview.mode` | `string` | `rules+llm` | `rules-only` / `rules+llm` / `all` |
+| `commandReview.mode` | `string` | `expected` | 其他命令的审核模式：按预期 / 规则与模型 / 仅规则 / 全量模型 |
 | `commandReview.tools` | `string[]` | `["bash","pwsh","run_command"]` | 受审核的工具名列表 |
-| `commandReview.writeOnly` | `boolean` | `true` | 是否只审查写操作，跳过只读调用 |
+| `commandReview.writeOnly` | `boolean` | `true` | 非 `all` 模式下跳过可识别的静态只读命令，不使用并发元数据豁免 |
 | `commandReview.readPatterns` | `string[]` | 内置只读正则 | 只读 Shell 命令识别规则 |
-| `commandReview.absoluteDenyDelete` | `boolean` | `true` | 识别到的删除操作是否直接拒绝 |
+| `commandReview.deletePolicy` | `string` | `expected`（兼容显式旧选择） | 删除独立策略：`deny` / `ask` / `expected` / `allow` |
+| `commandReview.gitPushPolicy` | `string` | `expected` | 推送独立策略：`deny` / `ask` / `expected` / `allow` |
+| `commandReview.absoluteDenyDelete` | `boolean` | 未设置 | 兼容旧配置；未设置 `deletePolicy` 时，显式 `true` 映射为 `deny`，显式 `false` 映射为 `allow`；均未设置时使用 `expected` |
 | `commandReview.deletePatterns` | `string[]` | 内置删除正则 | 删除操作识别规则 |
-| `commandReview.provider` | `string` | `deepseek-official` | 审核模型使用的 Provider |
-| `commandReview.model` | `string` | `deepseek-v4-flash` | 审核模型 ID |
+| `commandReview.provider` | `string` | `""` | 审核模型使用的 Provider；默认与 model 同时留空，自动跟随发起调用的会话 |
+| `commandReview.model` | `string` | `""` | 审核模型 ID；默认跟随会话模型，安全审核提示词仍独立保留 |
 | `commandReview.timeoutMs` | `number` | `20000` | 审核模型等待超时（毫秒） |
 | `commandReview.onFailure` | `string` | `ask` | 审核失败时行为：`ask` / `deny` / `allow` |
 | `commandReview.denyPatterns` | `string[]` | 内置高危正则 | 高风险命令识别规则 |
-| `commandReview.auditLimit` | `number` | `500` | 设置页保留的最近审核记录条数 |
+| `commandReview.auditLimit` | `number` | `500` | 最近记录条数，写入超过两倍时压缩；`0` 不限条数，仍受 2 MiB 文件上限约束 |
+
+自动审核不会因风险规则未命中而放行无法确认只读的受审调用：`rules+llm` 交给模型，`rules-only` 转人工；`all` 同样审核只读调用。无法完整解析或超出审核输入上限的命令转人工确认。删除规则识别执行语法，不把搜索文字、注释或补丁新增内容直接当作删除操作。
+
+“删除命令”和其下方的“git push（推送）命令”提供四档独立策略，在自动审核启用时生效。`deny` 直接拒绝；`ask` 强制询问用户；`expected` 独立做预期一致性审核（即使全局为仅本地规则）；`allow` 跳过本插件的 AI 审核和人工询问，不再走全局模式。其他命令才使用全局审核模式。复合命令按保留引号的操作片段分别处理，拒绝优先于询问，全部通过才执行，专项允许不能连带放行其他操作。无法可靠拆分的脚本或动态语法转人工确认。宿主权限始终保留；手动 Git 推送按钮不受此工具审核策略影响。
+
+新配置及重置后的默认模式、删除与推送策略均为 `expected`；已有显式选择不会迁移为宽松策略。界面会随当前选项显示对应详细说明；仅本地模式下，如果专项需要预期审核，仍显示模型配置。
+
+预期依据仅来自宿主标记 `source.kind=user` 的最近真人文本消息，保留消息 ID 与事件序号，不采信 Agent 自述、工具结果或插件注入内容作为授权。审核请求只携带相关真人上下文、原始参数、实际审核片段及只读取得的路径观察，不重放聊天系统提示词或工具列表。当前检查覆盖静态参数边界、相对路径、通配符所属范围、物理路径/符号链接，以及显式推送远端和引用参数；不执行命令、变量或脚本，不枚举通配符，也不猜测隐式 Git 推送目标。无法核实的目标、项目根目录等重大范围转人工确认。缺少预期依据或预期模型失败时，即使一般失败策略为允许，也不会自动批准。
+
+预期判定包含预期范围、实际范围、证据，批准必须引用真人消息 ID；这些信息出现在人工确认理由与审计记录中。返回批准前会检查参数、设置、真人请求及已观察路径是否变化，变化则要求重新审核或确认。此检查不是文件系统锁，也不能保证识别任意动态脚本内部的全部效果。
+
+审核模型收到脱敏后的完整工具参数和可确定的工作目录。仅缓存 `ask` 结果，缓存键包含完整原始参数的哈希及目录上下文；`allow` 和 `deny` 每次重新判断。人工确认前会保留后续审核监听器的拒绝结果。此模块仍是辅助审核，不是操作系统级执行隔离。
 | `explorer.enabled` | `boolean` | `true` | 是否启用项目文件浏览器 |
 | `explorer.side` | `string` | `right` | 面板停靠方位：`left` / `right` |
 | `explorer.defaultOpen` | `boolean` | `false` | 会话开始是否默认展开文件面板 |

@@ -25,6 +25,7 @@ const entry = join(process.cwd(), 'src', 'parsers.verify.entry.ts')
 writeFileSync(entry, `
 export { parseStatus, parseNumstat } from './features/explorer.ts'
 export { commandText, deletionPattern, parseVerdict, isReadOnlyCommand } from './features/command-review.ts'
+export { isGitPush } from './features/command-policy.ts'
 export { DEFAULT_DELETE_PATTERNS, DEFAULT_READ_PATTERNS } from './config.ts'
 export { spliceRegion, renderRegion, isRowId } from './quarantine.ts'
 `)
@@ -141,6 +142,9 @@ const readPatterns = mod.DEFAULT_READ_PATTERNS.map(source => new RegExp(source, 
 check('rg is read-only', mod.isReadOnlyCommand('rg -n "todo" src', readPatterns), true)
 check('git diff is read-only', mod.isReadOnlyCommand('git diff -- src/app.ts', readPatterns), true)
 check('PowerShell Get-Content is read-only', mod.isReadOnlyCommand('Get-Content package.json', readPatterns), true)
+for (const command of ['fd -x touch marker', 'fd -X touch marker', 'fd --exec=touch marker', 'fd --exec-batch touch marker']) {
+  check(`fd execution is not a read: ${command}`, mod.isReadOnlyCommand(command, readPatterns), false)
+}
 check('a build is not assumed read-only', mod.isReadOnlyCommand('npm run build', readPatterns), false)
 check('a write command is reviewed', mod.isReadOnlyCommand('rm -rf dist', readPatterns), false)
 check('output redirection is reviewed', mod.isReadOnlyCommand('cat a.txt > b.txt', readPatterns), false)
@@ -170,8 +174,36 @@ check('a normal read remains allowed', isDelete('bash', 'git status'), false)
 check('plain prose saying remove is not a delete operation', isDelete('search', 'docs about how to remove whitespace'), false)
 check('find deletion is denied', isDelete('bash', 'find . -delete'), true)
 check('branch deletion is denied', isDelete('bash', 'git branch -D feature'), true)
+for (const command of [' rm report.txt', '\tRemove-Item report.txt', 'command rm report.txt', 'sudo -- rm report.txt', 'env NAME=value rm report.txt']) {
+  check(`normalized deletion: ${command}`, isDelete('bash', command), true)
+}
+check('quoted SQL search is not deletion', isDelete('bash', "rg 'DROP TABLE' src"), false)
+check('branch listing patterns are not SQL', isDelete('bash', "git branch --list 'DROP TABLE'"), false)
+check('container inspection names are not SQL', isDelete('bash', "docker volume inspect 'DROP TABLE'"), false)
+check('structured search data is not a tool operation', isDelete('search', '{"action":"delete"}'), false)
+check('file content is not a patch operation', isDelete('write_file', '*** Delete File: example'), false)
+check('a comment is not deletion', isDelete('bash', 'git status # rm -rf dist'), false)
+check('patch additions are not deletion', isDelete('apply_patch', '+*** Delete File: example'), false)
+check('a code string is not deletion', isDelete('run_code', "print('os.remove(file)')"), false)
+check('a later code deletion still matches', isDelete('run_code', "const name = 'x'; fs.unlink(name)"), true)
+check('a multiline docstring is not deletion', isDelete('run_code', '"""example\nos.remove(file)\n"""'), false)
+check('custom deletion rules still recognize custom executable commands', mod.deletionPattern('bash', 'aws s3 rm s3://example/file', [/^aws\s+s3\s+rm\b/]) !== undefined, true)
+check('custom rules can combine tool identity and normalized execution', mod.deletionPattern('bash', 'command aws s3 rm s3://example/file', [/^tool:bash\naws\s+s3\s+rm\b/]) !== undefined, true)
 
 process.stdout.write('\nreviewer verdict parsing:\n')
+
+for (const command of ['git push', ' git push origin main', 'git -C repo push --force', 'git -Crepo push',
+  'git -c core.hooksPath=hooks push', 'git --git-dir=.git --no-pager push', 'command git push', 'sudo -- git push',
+  'env NAME=value git push', 'bash -lc "git push origin main"', 'git status && git push', 'git push "$BRANCH"',
+  '/usr/bin/git push', 'fd -x git push', '& git push']) {
+  check(`push invocation: ${command}`, mod.isGitPush('bash', command), true)
+}
+for (const command of ["rg 'git push' src", "echo 'git push'", 'git status # git push', 'git help push', 'git --help push',
+  'git --version push', "git commit -m 'git push'", "cat <<EOF\ngit push\nEOF"]) {
+  check(`push text is not execution: ${command}`, mod.isGitPush('bash', command), false)
+}
+check('dedicated git push tool', mod.isGitPush('git_push', ''), true)
+check('search arguments are not push execution', mod.isGitPush('search', 'git push'), false)
 
 check('a bare object',
   mod.parseVerdict('{"verdict":"deny","reason":"wipes the disk"}'),

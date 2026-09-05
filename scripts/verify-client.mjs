@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { build } from 'esbuild'
 
@@ -20,6 +21,9 @@ const result = await build({
     export { ComposerImages } from './client/ComposerImages.tsx'
     export { TurnInfoStore } from './client/turn-info-store.ts'
     export { useTabs } from './client/tabs.ts'
+    export { Select } from './client/ui.tsx'
+    export { reviewFollowsSession, effectiveDeletePolicy, usesReviewModel, DEFAULT_CONFIG } from './config.ts'
+    export { DICTS } from './client/locales.ts'
   `, resolveDir: resolve('src'), loader: 'ts' },
   bundle: true, write: false, format: 'cjs', platform: 'node', packages: 'external', jsx: 'automatic', logLevel: 'error',
   plugins: [{ name: 'host-boundary-mocks', setup(builder) {
@@ -34,7 +38,7 @@ const result = await build({
 })
 const mod = { exports: {} }
 new Function('require', 'module', 'exports', result.outputFiles[0].text)(name => name === 'react' ? react : require(name), mod, mod.exports)
-const { rewindTurn, ComposerImages, TurnInfoStore, useTabs } = mod.exports
+const { rewindTurn, ComposerImages, TurnInfoStore, useTabs, Select, reviewFollowsSession } = mod.exports
 const originalFetch = globalThis.fetch
 const originalWindow = globalThis.window
 const events = new EventTarget()
@@ -56,6 +60,62 @@ const base = () => ({
 })
 
 try {
+  await test('independent policies have four choices and dynamic detailed descriptions', async () => {
+    const page = readFileSync(resolve('src/client/SettingsPage.tsx'), 'utf8')
+    const deletion = page.indexOf("label={t('review.deleteCommand')} hint=")
+    const push = page.indexOf("label={t('review.gitPushCommand')} hint=")
+    assert.ok(deletion >= 0 && push > deletion)
+    assert.match(page.slice(deletion, push), /Select<CommandPolicy>/)
+    assert.match(page.slice(push, push + 600), /Select<CommandPolicy>/)
+    assert.match(page, /set\(\['commandReview', 'deletePolicy'\], next\)/)
+    assert.match(page, /set\(\['commandReview', 'gitPushPolicy'\], next\)/)
+    assert.ok(page.includes('review.deletePolicy.${effectiveDeletePolicy(c.commandReview)}.hint'))
+    assert.ok(page.includes("review.gitPushPolicy.${c.commandReview.gitPushPolicy ?? 'expected'}.hint"))
+    assert.ok(page.includes('usesReviewModel(c.commandReview)'))
+    for (const current of ['deny', 'ask', 'expected', 'allow']) {
+      let selected
+      const selector = Select({ value: current, label: 'Command policy',
+        options: ['deny', 'ask', 'expected', 'allow'].map(value => ({ value, label: value })),
+        onChange: value => { selected = value },
+      })
+      assert.equal(selector.props.value, current)
+      assert.deepEqual(selector.props.children[0].map(option => option.props.value), ['deny', 'ask', 'expected', 'allow'])
+      selector.props.onChange({ currentTarget: { value: current } })
+      assert.equal(selected, current)
+      for (const locale of ['en', 'zh']) {
+        assert.ok(mod.exports.DICTS[locale][`review.deletePolicy.${current}.hint`].length > 50)
+        assert.ok(mod.exports.DICTS[locale][`review.gitPushPolicy.${current}.hint`].length > 50)
+      }
+    }
+    assert.equal(mod.exports.effectiveDeletePolicy({ absoluteDenyDelete: false }), 'allow')
+    assert.equal(mod.exports.effectiveDeletePolicy({ absoluteDenyDelete: true, deletePolicy: 'ask' }), 'ask')
+    assert.equal(mod.exports.effectiveDeletePolicy({}), 'expected')
+    for (const mode of ['expected', 'rules+llm', 'rules-only', 'all']) {
+      assert.ok(mod.exports.DICTS.zh[`review.mode.${mode}.hint`].length > 50)
+    }
+    const settings = { ...mod.exports.DEFAULT_CONFIG.commandReview, mode: 'rules-only', deletePolicy: 'allow', gitPushPolicy: 'deny' }
+    assert.equal(mod.exports.usesReviewModel(settings), false)
+    assert.equal(mod.exports.usesReviewModel({ ...settings, deletePolicy: 'expected' }), true)
+    assert.equal(mod.exports.usesReviewModel({ ...settings, gitPushPolicy: 'expected' }), true)
+  })
+  await test('review selectors show a persistent automatic choice above provider groups', async () => {
+    assert.equal(reviewFollowsSession({ provider: '', model: '' }), true)
+    assert.equal(reviewFollowsSession({ provider: 'provider', model: 'fixed' }), false)
+    let selected
+    const selector = Select({
+      value: '', label: 'Reviewer model', options: [{ value: '', label: 'Follow session' }],
+      groups: [{ group: 'provider', options: [{ value: 'provider::fixed', label: 'Fixed' }] }],
+      onChange: value => { selected = value },
+    })
+    assert.equal(selector.props.value, '')
+    const [options, groups] = selector.props.children
+    assert.equal(options[0].props.value, '')
+    assert.equal(groups[0].props.children[0].props.value, 'provider::fixed')
+    selector.props.onChange({ currentTarget: { value: 'provider::fixed' } })
+    assert.equal(selected, 'provider::fixed')
+    selector.props.onChange({ currentTarget: { value: '' } })
+    assert.equal(selected, '')
+  })
   await test('running/unknown turns never restore files or create a fork', async () => {
     globalThis.fetch = async () => { throw new Error('must not fetch') }
     for (const closed of [false, undefined]) {

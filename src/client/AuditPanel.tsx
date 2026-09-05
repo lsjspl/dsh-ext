@@ -96,7 +96,7 @@ export function AuditPanel(props: { enabled: boolean }) {
               wordBreak: 'break-word',
               color: token.text,
             }}>{entry.command}</pre>
-            <div style={{ fontSize: 11, color: token.textMuted }}>{entry.reason}</div>
+            <div style={{ fontSize: 11, color: token.textMuted, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{entry.reason}</div>
             {entry.matched !== undefined && (
               <div style={{ fontSize: 10, color: token.textMuted }}>
                 {t('review.matched')} <code>{entry.matched}</code>

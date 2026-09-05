@@ -44,8 +44,9 @@ export interface DeepseekBalanceConfig {
   peakWeekdaysOnly: boolean
 }
 
-export type CommandReviewMode = 'rules-only' | 'rules+llm' | 'all'
+export type CommandReviewMode = 'expected' | 'rules-only' | 'rules+llm' | 'all'
 export type CommandReviewFallback = 'ask' | 'deny' | 'allow'
+export type CommandPolicy = 'deny' | 'ask' | 'expected' | 'allow'
 
 export interface CommandReviewConfig {
   enabled: boolean
@@ -53,12 +54,14 @@ export interface CommandReviewConfig {
   autoReview: boolean
   mode: CommandReviewMode
   tools: string[]
-  /** Skip tool calls the host classifies as concurrency-safe/read-only. */
+  /** Skip recognized literal read commands outside all mode. */
   writeOnly: boolean
   /** Shell-command fallbacks considered read-only when tool metadata is unavailable. */
   readPatterns: string[]
-  /** Deny recognized deletion operations before model or human review. */
-  absoluteDenyDelete: boolean
+  /** Legacy setting; used only when deletePolicy has not been explicitly set. */
+  absoluteDenyDelete?: boolean
+  deletePolicy?: CommandPolicy
+  gitPushPolicy: CommandPolicy
   /** Regular expressions matched against `tool:<name>\n<arguments/command>`. */
   deletePatterns: string[]
   provider: string
@@ -67,6 +70,19 @@ export interface CommandReviewConfig {
   onFailure: CommandReviewFallback
   denyPatterns: string[]
   auditLimit: number
+}
+
+export function effectiveDeletePolicy(settings: Pick<CommandReviewConfig, 'deletePolicy' | 'absoluteDenyDelete'>): CommandPolicy {
+  return settings.deletePolicy ?? (settings.absoluteDenyDelete === undefined ? 'expected' : settings.absoluteDenyDelete ? 'deny' : 'allow')
+}
+
+export function usesReviewModel(settings: CommandReviewConfig): boolean {
+  return settings.mode !== 'rules-only' || effectiveDeletePolicy(settings) === 'expected' || settings.gitPushPolicy === 'expected'
+}
+
+/** An empty pair selects the model of the session requesting the tool call. */
+export function reviewFollowsSession(settings: Pick<CommandReviewConfig, 'provider' | 'model'>): boolean {
+  return settings.provider.trim() === '' && settings.model.trim() === ''
 }
 
 export interface ExplorerConfig {
@@ -229,17 +245,20 @@ export const Config: z<Config> = z.object({
     enabled: z.boolean().default(true).description('Have a second model review high-risk tool calls before they run.'),
     autoReview: z.boolean().default(false).description('Chat auto-review switch. When false, command review is paused in chat.'),
     mode: z.union([
+      z.const('expected').description('Compare actual command effects with source-verified user intent.'),
       z.const('rules-only').description('Screen with local patterns only; never call a model.'),
-      z.const('rules+llm').description('Screen locally, then send hits to the reviewer model.'),
+      z.const('rules+llm').description('Screen locally, then review risky or unclassified calls with the model.'),
       z.const('all').description('Send every covered tool call to the reviewer model.'),
-    ]).default('rules+llm'),
+    ]).default('expected'),
     tools: z.array(z.string()).default(['bash', 'pwsh', 'run_command']).description('Tool names subject to review.'),
-    writeOnly: z.boolean().default(true).description('Skip read-only calls; use host tool metadata first and readPatterns as a shell fallback.'),
-    readPatterns: z.array(z.string()).default([...DEFAULT_READ_PATTERNS]).description('Regular expressions that recognize read-only shell commands when tool metadata is unavailable.'),
-    absoluteDenyDelete: z.boolean().default(true).description('Deny recognized deletion operations immediately, without model or human review.'),
-    deletePatterns: z.array(z.string()).default([...DEFAULT_DELETE_PATTERNS]).description('Regular expressions matched against tool name plus command/arguments to recognize deletion operations.'),
-    provider: z.string().default('deepseek-official').description('Provider route the reviewer model runs on.'),
-    model: z.string().default('deepseek-chat').description('Reviewer model id.'),
+    writeOnly: z.boolean().default(true).description('Skip recognized literal read commands outside all mode. Concurrency metadata never grants an exemption.'),
+    readPatterns: z.array(z.string()).default([...DEFAULT_READ_PATTERNS]).description('Patterns narrowing the built-in literal read-command classifier.'),
+    absoluteDenyDelete: z.boolean().description('Legacy explicit deletion choice. Omitted values no longer introduce an implicit denial.'),
+    deletePolicy: z.union([z.const('deny'), z.const('ask'), z.const('expected'), z.const('allow')]).description('Independent deletion policy. When absent, preserve an explicit legacy choice; otherwise use expected review.'),
+    gitPushPolicy: z.union([z.const('deny'), z.const('ask'), z.const('expected'), z.const('allow')]).default('expected').description('Independent git push policy, not an additional global review restriction.'),
+    deletePatterns: z.array(z.string()).default([...DEFAULT_DELETE_PATTERNS]).description('Deletion patterns matched against tool identity and recognized executable syntax, not arbitrary text arguments.'),
+    provider: z.string().default('').description('Reviewer provider. Leave both provider and model empty to follow the calling session.'),
+    model: z.string().default('').description('Reviewer model. Leave both provider and model empty to follow the calling session.'),
     timeoutMs: z.number().step(1).min(1000).max(120000).default(20000).description('Reviewer deadline.'),
     onFailure: z.union([
       z.const('ask').description('Escalate to the user (fail-safe).'),
@@ -247,7 +266,7 @@ export const Config: z<Config> = z.object({
       z.const('allow').description('Let the call through and log it (fail-open).'),
     ]).default('ask').description('What to do when the reviewer times out, errors, or has no credential.'),
     denyPatterns: z.array(z.string()).default([...DEFAULT_DENY_PATTERNS]).description('Regular expressions that mark a command as high-risk.'),
-    auditLimit: z.number().step(1).min(0).max(10000).default(500).description('How many past verdicts to retain for the settings page.'),
+    auditLimit: z.number().step(1).min(0).max(10000).default(500).description('Recent verdict retention, compacted on writes above twice this count. Zero disables the count cap; the 2 MiB byte cap still applies.'),
   }),
 
   explorer: z.object({
@@ -333,14 +352,14 @@ export const DEFAULT_CONFIG: Config = {
   commandReview: {
     enabled: true,
     autoReview: false,
-    mode: 'rules+llm',
+    mode: 'expected',
     tools: ['bash', 'pwsh', 'run_command'],
     writeOnly: true,
     readPatterns: [...DEFAULT_READ_PATTERNS],
-    absoluteDenyDelete: true,
+    gitPushPolicy: 'expected',
     deletePatterns: [...DEFAULT_DELETE_PATTERNS],
-    provider: 'deepseek-official',
-    model: 'deepseek-v4-flash',
+    provider: '',
+    model: '',
     timeoutMs: 20000,
     onFailure: 'ask',
     denyPatterns: [...DEFAULT_DENY_PATTERNS],

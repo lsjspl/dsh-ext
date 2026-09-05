@@ -46,9 +46,10 @@ export function trimUnresolvedToolCalls(history: readonly unknown[]): readonly u
 
 /**
  * Return a cached successful value when the key is still fresh, otherwise run
- * `compute`, store its successful resolution, and return it.
+ * `compute`, store its successful resolution when permitted by `shouldCache`,
+ * and return it. Callers can exclude state-dependent decisions from retention.
  */
-export function cached<T>(key: string, ttlMs: number, compute: () => Promise<T>): Promise<T> {
+export function cached<T>(key: string, ttlMs: number, compute: () => Promise<T>, shouldCache: (value: T) => boolean = () => true): Promise<T> {
   const now = Date.now()
   const hit = store.get(key)
   if (hit !== undefined && hit.expiresAt > now) {
@@ -59,6 +60,7 @@ export function cached<T>(key: string, ttlMs: number, compute: () => Promise<T>)
   }
 
   return compute().then((value: T) => {
+    if (!shouldCache(value)) return value
     if (store.size >= MAX_ENTRIES) {
       const oldest = store.keys().next().value
       if (oldest !== undefined) store.delete(oldest)

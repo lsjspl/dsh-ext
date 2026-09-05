@@ -303,8 +303,12 @@ export function Select<T extends string>(props: {
       }}
     >
 
-      {props.groups !== undefined
-        ? props.groups.map(group => (
+      {props.options?.map(option => (
+        <option key={option.value} value={option.value} style={{ color: token.text, background: token.surface }}>
+          {option.label}
+        </option>
+      ))}
+      {props.groups?.map(group => (
             <optgroup
               key={group.group}
               label={group.group}
@@ -320,15 +324,6 @@ export function Select<T extends string>(props: {
                 </option>
               ))}
             </optgroup>
-          ))
-        : props.options?.map(option => (
-            <option
-              key={option.value}
-              value={option.value}
-              style={{ color: token.text, background: token.surface }}
-            >
-              {option.label}
-            </option>
           ))}
     </select>
   )
