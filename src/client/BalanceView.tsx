@@ -225,6 +225,7 @@ export function BalanceCard(props: { enabled: boolean }) {
               {t('balance.unavailable')}
             </Notice>
           )}
+          {view.data.stale && <Notice kind="error">{t('balance.stale')}: {view.data.error}</Notice>}
 
           {view.data.rows.length === 0 ? (
             <div style={{ fontSize: 12, color: token.textMuted }}>{t('balance.noRows')}</div>
@@ -544,7 +545,7 @@ export function BalanceBadge(props: { cardEl?: HTMLElement | null; inline?: bool
     <div
       data-dsh-plugin="dsh-ext"
       data-dsh-part="balance-badge"
-      title={titleText}
+      title={`${view.error || activeData?.stale ? `${t('balance.stale')}\n` : ''}${titleText}`}
       onClick={handleBadgeClick}
       className={shakeClass}
       style={{
@@ -603,6 +604,7 @@ export function BalanceBadge(props: { cardEl?: HTMLElement | null; inline?: bool
           }}
         >
           <span ref={balanceTextRef}>{primary.totalBalance}</span>
+          {(view.error || activeData?.stale) && <span style={{ color: token.warn, fontSize: 11 }}>{t('balance.stale')}</span>}
 
           {/* 5 段非规则抛物线散布扣血飘字 */}
           {hits.map(hit => {

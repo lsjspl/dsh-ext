@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { git, hasGit, splitNul } from './git.ts'
@@ -78,8 +78,8 @@ export class SnapshotError extends Error {
 export class CheckpointStore {
   constructor(
     private readonly root: string,
-    private readonly excludes: readonly string[],
-    private readonly maxFileSizeMb: number,
+    private readonly excludes: readonly string[] | (() => readonly string[]),
+    private readonly maxFileSizeMb: number | (() => number),
   ) {}
 
   private repoFor(workTree: string): ShadowRepo {
@@ -149,26 +149,8 @@ export class CheckpointStore {
       await git(['config', 'core.hooksPath', join(repo.gitDir, 'no-hooks')], { cwd: workTree, env })
     }
 
-    await this.clearStaleLock(repo)
     await this.writeExcludes(repo)
     return repo
-  }
-
-  /**
-   * Remove a leftover index lock in the shadow repository.
-   *
-   * git creates `<index>.lock` for the duration of an index write and removes it
-   * on completion; one still present means a previous run was killed mid-write.
-   * Every later index operation then fails, so the feature stays broken until
-   * someone deletes a file they have no reason to know about.
-   *
-   * Clearing it is safe HERE and would not be in the project's repository: this
-   * lock belongs to an index only this plugin writes, and its writes are already
-   * serialized per workspace by the caller. There is no other writer whose work
-   * could be interrupted.
-   */
-  private async clearStaleLock(repo: ShadowRepo): Promise<void> {
-    await rm(`${join(repo.gitDir, 'dsh-index')}.lock`, { force: true }).catch(() => { /* best effort */ })
   }
 
   /** Invariant 3, plus the user's configured excludes and the size cap. */
@@ -178,8 +160,8 @@ export class CheckpointStore {
     const lines = [
       '# Written by dsh-ext. Edit the plugin settings, not this file.',
       // The load-bearing one: the project's own history is not ours to copy.
-      '/.git/',
-      ...this.excludes,
+      '/.git',
+      ...(typeof this.excludes === 'function' ? this.excludes() : this.excludes),
     ]
     await writeFile(join(infoDir, 'exclude'), `${lines.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 })
   }
@@ -199,68 +181,47 @@ export class CheckpointStore {
    * overwhelmingly build output, caches, and secrets, none of which belong in a
    * snapshot — but it does mean rollback does not cover them.
    */
-  private async stage(repo: ShadowRepo, signal?: AbortSignal): Promise<void> {
-    const env = this.env(repo)
-    const added = await git(['add', '--all', '.'], { cwd: repo.workTree, env, signal })
-    if (!added.ok) {
-      throw new SnapshotError('git-failed', `git could not stage the workspace: ${added.stderr.trim() || `exit ${added.code}`}`)
+  private async stage(repo: ShadowRepo, signal?: AbortSignal, indexFile?: string): Promise<void> {
+    await this.writeExcludes(repo)
+    const env = { ...this.env(repo), ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}) }
+    const options = { cwd: repo.workTree, env, signal }
+    const limitMb = typeof this.maxFileSizeMb === 'function' ? this.maxFileSizeMb() : this.maxFileSizeMb
+    const listed = await git(['ls-files', '--cached', '--others', '--exclude-standard', '-z'], options)
+    const ignored = await git(['ls-files', '--cached', '--ignored', '--exclude-standard', '-z'], options)
+    if (!listed.ok || !ignored.ok) throw new SnapshotError('git-failed', 'cannot enumerate checkpoint files')
+    const excluded = new Set(splitNul(ignored.stdout))
+    const candidates = [...new Set(splitNul(listed.stdout))]
+    const eligible: string[] = []
+    // Check sizes BEFORE git creates blobs, with bounded filesystem concurrency.
+    for (let at = 0; at < candidates.length; at += 64) {
+      signal?.throwIfAborted()
+      await Promise.all(candidates.slice(at, at + 64).map(async path => {
+        if (path === '.git' || path.startsWith('.git/')) excluded.add(path)
+        if (excluded.has(path)) return
+        try {
+          const info = await lstat(join(repo.workTree, path))
+          if (info.size > limitMb * 1024 * 1024) {
+            excluded.add(path)
+            return
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+          // Deleted indexed files still need git add to record their deletion.
+        }
+        eligible.push(path)
+      }))
     }
-    await this.dropOversized(repo, signal)
-  }
-
-  /**
-   * Unstage anything past the size cap.
-   *
-   * Sizes come from one `cat-file --batch-check` fed every object id, rather than
-   * one `cat-file -s` per file. The per-file form spawns a process per staged
-   * file, which on a repository of any size costs more than the snapshot it is
-   * protecting.
-   */
-  private async dropOversized(repo: ShadowRepo, signal?: AbortSignal): Promise<void> {
-    const env = this.env(repo)
-    const limit = this.maxFileSizeMb * 1024 * 1024
-    const listed = await git(['ls-files', '-s', '-z'], { cwd: repo.workTree, env, signal })
-    if (!listed.ok) return
-
-    // `<mode> <object> <stage>\t<path>` per record.
-    const staged: { object: string; path: string }[] = []
-    for (const record of splitNul(listed.stdout)) {
-      const tab = record.indexOf('\t')
-      if (tab < 0) continue
-      const object = record.slice(0, tab).split(' ')[1]
-      if (object !== undefined) staged.push({ object, path: record.slice(tab + 1) })
-    }
-    if (staged.length === 0) return
-
-    const sizes = await git(['cat-file', '--batch-check=%(objectname) %(objectsize)'], {
-      cwd: repo.workTree,
-      env,
-      signal,
-      input: `${staged.map(entry => entry.object).join('\n')}\n`,
-    })
-    if (!sizes.ok) return
-
-    const oversized = new Set<string>()
-    const byObject = new Map<string, number>()
-    for (const line of sizes.stdout.split('\n')) {
-      const [object, size] = line.trim().split(' ')
-      const bytes = Number.parseInt(size ?? '', 10)
-      if (object !== undefined && Number.isFinite(bytes)) byObject.set(object, bytes)
-    }
-    for (const entry of staged) {
-      const bytes = byObject.get(entry.object)
-      if (bytes !== undefined && bytes > limit) oversized.add(entry.path)
-    }
-    if (oversized.size === 0) return
-
-    // Batched: one `rm --cached` per chunk rather than one argument list long
-    // enough to exceed the platform's command-line limit.
-    const paths = [...oversized]
-    const CHUNK = 200
-    for (let index = 0; index < paths.length; index += CHUNK) {
-      await git(['rm', '--cached', '--quiet', '--', ...paths.slice(index, index + CHUNK)], {
-        cwd: repo.workTree, env, signal,
+    if (excluded.size > 0) {
+      const removed = await git(['update-index', '--force-remove', '-z', '--stdin'], {
+        ...options, input: `${[...excluded].join('\0')}\0`,
       })
+      if (!removed.ok) throw new SnapshotError('git-failed', `cannot exclude checkpoint files: ${removed.stderr}`)
+    }
+    if (eligible.length > 0) {
+      const added = await git(['--literal-pathspecs', 'add', '--all', '--pathspec-from-file=-', '--pathspec-file-nul'], {
+        ...options, input: `${eligible.join('\0')}\0`,
+      })
+      if (!added.ok) throw new SnapshotError('git-failed', `cannot stage checkpoint files: ${added.stderr}`)
     }
   }
 
@@ -553,7 +514,7 @@ export class CheckpointStore {
         const tempEnv = { ...env, GIT_INDEX_FILE: tempIndex }
         const seeded = await git(['read-tree', from], { cwd: workTree, env: tempEnv, signal })
         if (!seeded.ok) return { files: [], added: 0, removed: 0 }
-        await git(['add', '--all', '.'], { cwd: workTree, env: tempEnv, signal })
+        await this.stage(repo, signal, tempIndex)
         const written = await git(['write-tree'], { cwd: workTree, env: tempEnv, signal })
         if (written.ok) to = written.stdout.trim()
       } finally {
@@ -625,8 +586,18 @@ export class CheckpointStore {
     const current = await git(['ls-files', '-z'], { cwd: workTree, env, signal })
     const target = await git(['ls-tree', '-r', '--name-only', '-z', checkpointId], { cwd: workTree, env, signal })
     if (!target.ok) throw new Error('no such checkpoint')
+    if (!current.ok) throw new Error('could not inspect the current checkpoint index')
     const targetPaths = new Set(splitNul(target.stdout))
-    const toRemove = (current.ok ? splitNul(current.stdout) : []).filter(path => !targetPaths.has(path))
+    const currentPaths = new Set(splitNul(current.stdout))
+    for (const path of targetPaths) {
+      if (currentPaths.has(path)) continue
+      const info = await lstat(join(workTree, path)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return undefined
+        throw error
+      })
+      if (info !== undefined) throw new Error(`cannot overwrite a path excluded from the undo checkpoint: ${path}`)
+    }
+    const toRemove = [...currentPaths].filter(path => !targetPaths.has(path))
 
     const read = await git(['read-tree', checkpointId], { cwd: workTree, env, signal })
     if (!read.ok) throw new Error('could not read that checkpoint')
@@ -635,10 +606,8 @@ export class CheckpointStore {
 
     let removed = 0
     for (const path of toRemove) {
-      try {
-        await rm(join(workTree, path), { force: true })
-        removed += 1
-      } catch { /* a file already gone needs no removal */ }
+      await rm(join(workTree, path), { force: true })
+      removed += 1
     }
 
     // Record the restored state as a new checkpoint on top of the history,
@@ -683,17 +652,41 @@ export class CheckpointStore {
     const env = this.env(repo)
     const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
     const rows = await this.list(workTree, undefined, signal)
-    const keep = rows.filter(row => row.at >= cutoff)
-    if (keep.length === rows.length) return 0
+    // Keep HEAD as a recovery baseline even when the entire history is expired.
+    const boundary = Math.max(0, rows.findLastIndex(row => row.at >= cutoff))
+    const oldest = rows[boundary]
+    const expired = new Set(rows.slice(boundary + 1).map(row => row.id))
+    if (oldest === undefined || expired.size === 0) return 0
 
-    // Re-root the branch at the oldest checkpoint worth keeping, then let git
-    // drop what nothing references.
-    const oldest = keep[keep.length - 1]
-    if (oldest === undefined) return 0
-    await git(['reset', '--soft', oldest.id], { cwd: workTree, env, signal })
-    await git(['reflog', 'expire', '--expire=now', '--all'], { cwd: workTree, env, signal })
-    await git(['gc', '--prune=now', '--quiet'], { cwd: workTree, env, signal })
-    return rows.length - keep.length
+    const refs = await git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/dsh-turns/', 'refs/dsh-turn-ends/'], { cwd: workTree, env, signal })
+    if (!refs.ok) throw new Error('cannot inspect checkpoint references for retention')
+    const deletes = refs.stdout.split('\n').flatMap(line => {
+      const [ref, id] = line.trim().split(' ')
+      return ref && id && expired.has(id) ? [`delete ${ref} ${id}`] : []
+    })
+    if (deletes.length > 0) {
+      const removed = await git(['update-ref', '--stdin'], { cwd: workTree, env, signal, input: `start\n${deletes.join('\n')}\nprepare\ncommit\n` })
+      if (!removed.ok) throw new Error('cannot expire checkpoint references')
+    }
+    const anchorsDir = join(repo.gitDir, 'dsh-turn-anchors')
+    const anchorFiles = await readdir(anchorsDir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return []
+      throw error
+    })
+    for (const name of anchorFiles.filter(name => name.endsWith('.json'))) {
+      const file = join(anchorsDir, name)
+      const index = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
+      for (const id of expired) delete index[id]
+      await writeFileAtomic(file, `${JSON.stringify(index)}\n`, { mode: 0o600 })
+    }
+    // A shallow boundary preserves retained commit IDs and HEAD while cutting
+    // traversal to expired ancestors. This file belongs only to the shadow repo.
+    await writeFileAtomic(join(repo.gitDir, 'shallow'), `${oldest.id}\n`, { mode: 0o600 })
+    for (const args of [['reflog', 'expire', '--expire=now', '--all'], ['gc', '--prune=now', '--quiet']]) {
+      const result = await git(args, { cwd: workTree, env, signal })
+      if (!result.ok) throw new Error(`checkpoint retention failed: ${result.stderr}`)
+    }
+    return expired.size
   }
 
   /** Remove one workspace's shadow repository entirely. */

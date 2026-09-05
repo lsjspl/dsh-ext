@@ -18,7 +18,7 @@ import { getActiveWorkspaceRoot } from './use-workspace.ts'
 
 export type RewindOutcome =
   | { readonly ok: true; readonly childId: string; readonly fresh: boolean }
-  | { readonly ok: false; readonly reason: 'no-sessions' | 'restore-failed' | 'fork-failed' | 'new-session-failed' | 'first-turn'; readonly message: string }
+  | { readonly ok: false; readonly reason: 'no-sessions' | 'restore-failed' | 'fork-failed' | 'new-session-failed' | 'first-turn' | 'turn-running'; readonly message: string }
 
 /** The workspaces face the first-turn fallback needs (host's `ctx.workspaces`). */
 export interface WorkspacesFace {
@@ -151,13 +151,34 @@ export async function rewindTurn(props: {
 }): Promise<RewindOutcome> {
   const undoAnchorSeq = props.detail?.undoAnchorSeq
   const isFirstTurn = props.detail?.turn === 1 || (props.detail?.turn === undefined && undoAnchorSeq === undefined)
+  if (props.detail?.closed !== true) {
+    return { ok: false, reason: 'turn-running', message: 'Wait for the turn to finish before rewinding.' }
+  }
+  if (!isFirstTurn && undoAnchorSeq === undefined) return { ok: false, reason: 'fork-failed', message: props.firstTurnText }
 
-  // Restore files if this turn had a checkpoint
-  if (props.checkpointId !== undefined) {
-    const restore = await callApi('/checkpoints/restore', {
-      body: { id: props.checkpointId, session: props.sessionId, confirm: true },
-    })
-    if (!restore.ok) return { ok: false, reason: 'restore-failed', message: restore.message }
+  // Prepare the chat target first: a failed fork must not change any files.
+  async function finish(childId: string, fresh: boolean): Promise<RewindOutcome> {
+    let undoId: string | undefined
+    if (props.checkpointId !== undefined) {
+      const restored = await callApi<{ undoId?: string }>('/checkpoints/restore', {
+        body: { id: props.checkpointId, session: props.sessionId, confirm: true },
+      })
+      if (!restored.ok) return { ok: false, reason: 'restore-failed', message: restored.message }
+      undoId = restored.value.undoId
+    }
+    try {
+      props.sessions.open(childId as never)
+      return { ok: true, childId, fresh }
+    } catch (error) {
+      let message = String(error)
+      if (undoId !== undefined) {
+        const undone = await callApi('/checkpoints/restore', {
+          body: { id: undoId, session: props.sessionId, confirm: true },
+        })
+        if (!undone.ok) message += `; files could not be recovered: ${undone.message}. Recovery checkpoint: ${undoId}`
+      }
+      return { ok: false, reason: 'fork-failed', message: props.forkFailedText(message) }
+    }
   }
 
   if (isFirstTurn) {
@@ -173,8 +194,7 @@ export async function rewindTurn(props: {
     if (props.workspaces !== undefined && workspaceId !== undefined) {
       try {
         const childId = await props.workspaces.connectWorkspace(workspaceId)
-        props.sessions.open(childId as never)
-        return { ok: true, childId, fresh: true }
+        return await finish(childId, true)
       } catch (startError: unknown) {
         console.warn('[dsh-ext] starting the fresh session via connectWorkspace failed:', startError)
       }
@@ -192,8 +212,7 @@ export async function rewindTurn(props: {
             ? { cwd }
             : {}
         const childId = await (props.sessions as unknown as { create(opts?: unknown): Promise<string> }).create(createOpts)
-        props.sessions.open(childId as never)
-        return { ok: true, childId, fresh: true }
+        return await finish(childId, true)
       } catch (createError: unknown) {
         console.warn('[dsh-ext] creating fresh session via sessions.create failed:', createError)
         return { ok: false, reason: 'new-session-failed', message: createError instanceof Error ? createError.message : String(createError) }
@@ -213,10 +232,9 @@ export async function rewindTurn(props: {
       atSeq: undoAnchorSeq,
       increaseTitle: true,
     })
-    props.sessions.open(childId as never)
-    return { ok: true, childId: String(childId), fresh: false }
+    return await finish(String(childId), false)
   } catch (forkError: unknown) {
-    console.warn('[dsh-ext] the chat fork after restore failed:', forkError)
+    console.warn('[dsh-ext] the chat rewind failed:', forkError)
     return {
       ok: false,
       reason: 'fork-failed',

@@ -125,7 +125,7 @@ function ReviewRow(props: {
   label: string
   depth: number
   counts: { added: number; removed: number } | undefined
-  onOpenDiff: (path: string) => void
+  onOpenDiff: (path: string, side?: 'staged' | 'unstaged') => void
   onStage?: (path: string | string[], stage: boolean) => void
   onDiscard?: (path: string) => void
   stageBusy?: boolean
@@ -155,7 +155,7 @@ function ReviewRow(props: {
       <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
         <button
           type="button"
-          onClick={() => { props.onOpenDiff(change.path) }}
+          onClick={() => { props.onOpenDiff(change.path, change.staged ? 'staged' : 'unstaged') }}
           title={`${change.path} (${describeChange(change, t)})`}
           style={{ ...rowStyle, paddingLeft: 8 + props.depth * TREE_INDENT, flex: 1, minWidth: 0 }}
         >
@@ -481,7 +481,7 @@ function FolderNodes(props: {
   collapsed: ReadonlySet<string>
   onToggle: (path: string) => void
   countsFor: (change: ChangeEntry) => { added: number; removed: number } | undefined
-  onOpenDiff: (path: string) => void
+  onOpenDiff: (path: string, side?: 'staged' | 'unstaged') => void
   onStage?: (paths: string | string[], stage: boolean) => void
   onDiscardFolder?: (node: FolderNode) => void
   onDiscardFile?: (path: string) => void
@@ -1011,7 +1011,7 @@ interface DiscardModalState {
  */
 export function ReviewView(props: {
   status: ExplorerStatus
-  onOpenDiff: (path: string) => void
+  onOpenDiff: (path: string, side?: 'staged' | 'unstaged') => void
   workspaceRoot?: string
   sessionId?: string
   scope?: string

@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 
 /**
@@ -49,8 +50,9 @@ export async function readQuarantine(file: string): Promise<QuarantineRecord> {
     const parsed = JSON.parse(await readFile(file, 'utf8')) as { rows?: unknown; updatedAt?: unknown }
     const rows = Array.isArray(parsed.rows) ? parsed.rows.filter(isRowId) : []
     return { rows, updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0 }
-  } catch {
-    return EMPTY
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY
+    throw error
   }
 }
 
@@ -122,10 +124,7 @@ export async function updateQuarantine(
   patchFile: string,
   mutate: (rows: readonly string[]) => readonly string[],
 ): Promise<QuarantineRecord> {
-  // The lock helper needs the parent directory to exist; writeFileAtomic
-  // creates it, so seed the record first when it is missing.
-  const current = await readQuarantine(recordFile)
-  await writeFileAtomic(recordFile, JSON.stringify(current, null, 2), { mode: 0o600, dirMode: 0o700 })
+  await mkdir(dirname(recordFile), { recursive: true, mode: 0o700 })
 
   return await withFileLock(recordFile, async () => {
     const before = await readQuarantine(recordFile)
@@ -135,7 +134,9 @@ export async function updateQuarantine(
     let existing = ''
     try {
       existing = await readFile(patchFile, 'utf8')
-    } catch { /* a home patch file that does not exist yet is an empty one */ }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
 
     // The patch file goes first: a record claiming a quarantine that the
     // launcher will not honour is the one inconsistency with a bad outcome.

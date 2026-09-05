@@ -27,6 +27,10 @@ export async function callApi<T>(
     if (payload === undefined || typeof payload !== 'object') {
       return { ok: false, message: `unreadable response (HTTP ${response.status})` }
     }
+    if (payload.ok && (init?.method === 'POST' || init?.body !== undefined)
+      && route.startsWith('/checkpoints/') && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('dsh-ext-checkpoints-changed'))
+    }
     return payload
   } catch (error: unknown) {
     if (error instanceof DOMException && error.name === 'AbortError') {

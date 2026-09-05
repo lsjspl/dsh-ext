@@ -53,7 +53,8 @@ export function settingsRoutes(ctx: Context, config: () => Config): Record<strin
   return {
     '/config': () => describe(),
 
-    '/config/mutate': async ({ body }) => {
+    '/config/mutate': async ({ body, method }) => {
+      if (method !== 'POST') throw new ApiError(405, 'use POST to change settings')
       const settings = ctx.get('settings')
       if (settings === undefined) {
         throw new ApiError(409, 'no settings provider is mounted; this deployment cannot store preferences')
@@ -62,6 +63,14 @@ export function settingsRoutes(ctx: Context, config: () => Config): Record<strin
       const ops = request?.ops
       if (!Array.isArray(ops) || ops.length === 0 || !ops.every(isPathOp)) {
         throw new ApiError(400, 'expected a non-empty `ops` array of {op,path[,value]}')
+      }
+      for (const op of ops) {
+        if (op.op !== 'set') continue
+        const value = op.value as any
+        const gc = op.path.length === 0 ? value?.sessionAdmin?.attachmentGc
+          : op.path[0] === 'sessionAdmin' ? (op.path.length === 1 ? value?.attachmentGc
+            : op.path[1] === 'attachmentGc' ? value : undefined) : undefined
+        if (gc === true) throw new ApiError(409, 'attachment garbage collection is unavailable: this host has no safe attachment deletion API')
       }
       const expected = typeof request?.expectedRevision === 'number' ? request.expectedRevision : undefined
 

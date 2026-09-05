@@ -279,6 +279,7 @@ export function CreateWorktreeModal(props: {
   onWorktreeCreated?: (path: string, branch?: string, workspaceId?: string) => void
 }) {
   const t = useT()
+  const config = useClientConfig()
   const [branchMode, setBranchMode] = useState<'existing' | 'new'>('existing')
   const [selectedBranch, setSelectedBranch] = useState('')
   const [newBranchName, setNewBranchName] = useState('')
@@ -315,9 +316,9 @@ export function CreateWorktreeModal(props: {
         setNewBranchName('')
         setPath(`../${repoName}-feature`)
       }
-      setAutoRegister(true)
+      setAutoRegister(config?.git.worktreeAutoRegister ?? true)
     }
-  }, [props.open, availableBranches, repoName])
+  }, [props.open, availableBranches, repoName, config?.git.worktreeAutoRegister])
 
   const handleBranchSelect = (b: string) => {
     setSelectedBranch(b)
@@ -540,6 +541,27 @@ export function ComposerGitControlsInner(props: {
   const [createBranchOpen, setCreateBranchOpen] = useState(false)
   const [createWorktreeOpen, setCreateWorktreeOpen] = useState(false)
 
+  useEffect(() => {
+    if (!props.sessionId || binding.data?.binding?.sessionId !== props.sessionId
+      || !config?.git.enabled || !config.git.autoAlignBranch || config.git.sessionBinding === 'off') return
+    const controller = new AbortController()
+    void callApi<{ aligned: boolean }>('/explorer/git/align', {
+      body: { session: props.sessionId }, signal: controller.signal,
+    }).then(result => {
+      if (controller.signal.aborted) return
+      if (!result.ok) setToastText(result.message)
+      else if (result.value.aligned) {
+        status.reload()
+        branches.reload()
+        worktrees.reload()
+        binding.reload()
+      }
+    })
+    return () => { controller.abort() }
+  }, [props.sessionId, binding.data?.binding?.sessionId, binding.data?.binding?.branch,
+    config?.git.enabled, config?.git.autoAlignBranch, config?.git.sessionBinding,
+    status.reload, branches.reload, worktrees.reload, binding.reload])
+
   // Reset selected branch when active workspace changes
   useEffect(() => {
     setSelectedBranch(null)
@@ -594,7 +616,7 @@ export function ComposerGitControlsInner(props: {
     document.querySelector('[class*="heroWorkspaceRow"]')
   )
   const isNewSession = isHero || !props.sessionId || sessionSnap?.blank === true
-  const isLocked = !isNewSession || binding.data?.binding?.locked === true
+  const isLocked = config?.git.sessionBinding === 'strict' && (!isNewSession || binding.data?.binding?.locked === true)
 
   // Force close popovers when locked - MUST be called unconditionally before any early returns!
   // Non-repository workspaces are exempt: there is no branch binding to lock,
@@ -1243,4 +1265,3 @@ export function ComposerGitControls(props: {
     </GitErrorBoundary>
   )
 }
-

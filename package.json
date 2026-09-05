@@ -53,7 +53,9 @@
     "typecheck": "tsc --noEmit",
     "verify:parsers": "node scripts/verify-parsers.mjs",
     "verify:checkpoints": "node scripts/verify-checkpoints.mjs",
-    "verify": "npm run typecheck && npm run verify:parsers && npm run verify:checkpoints",
+    "verify:regressions": "node scripts/verify-regressions.mjs",
+    "verify:client": "node scripts/verify-client.mjs",
+    "verify": "npm run typecheck && npm run verify:parsers && npm run verify:checkpoints && npm run verify:regressions && npm run verify:client",
     "prepublishOnly": "npm run verify && npm run build"
   },
   "dependencies": {

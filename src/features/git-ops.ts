@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-workspace'
-import { readFile, rm } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
@@ -28,6 +28,16 @@ import type {
  */
 function asRecord(val: unknown): Record<string, unknown> {
   return (typeof val === 'object' && val !== null) ? (val as Record<string, unknown>) : {}
+}
+
+async function validateBranch(root: string, name: string, signal?: AbortSignal): Promise<void> {
+  if (!name || name.startsWith('-') || name.includes('\0')) throw new ApiError(400, 'invalid branch name')
+  const valid = await git(['check-ref-format', '--branch', name], { cwd: root, signal })
+  if (!valid.ok || valid.stdout.trim() !== name) throw new ApiError(400, 'invalid branch name')
+}
+
+function validateStartPoint(value: string | undefined): void {
+  if (value !== undefined && (value.startsWith('-') || value.includes('\0'))) throw new ApiError(400, 'invalid start point')
 }
 
 /** How long an identical commit-generation request may reuse the previous AI message. */
@@ -479,6 +489,40 @@ export function mountGitOps(
 ): () => void {
   const bindingStore = new SessionBindingStore(bindingFilePath)
 
+  const handleAlign: ApiHandler = async ({ body }) => {
+    const settings = config().git
+    if (!settings.enabled || !config().explorer.enabled) throw new ApiError(404, 'Git operations are switched off')
+    if (!settings.autoAlignBranch || settings.sessionBinding === 'off') return { aligned: false }
+    const data = asRecord(body)
+    if (typeof data.session !== 'string' || !data.session) throw new ApiError(400, 'session ID is required')
+    const signal = new AbortController().signal
+    const { root } = await resolveRoot(ctx, null, data.session, signal)
+    const repo = await repositoryRoot(root, signal)
+    const binding = await bindingStore.get(data.session)
+    if (!repo || !binding) return { aligned: false }
+    if (normalizeGitPath(binding.repoRoot) !== normalizeGitPath(repo)) {
+      throw new ApiError(409, 'session binding belongs to a different repository')
+    }
+    const state = await gitBranchState(repo, signal)
+    if (!state.isDetached && state.branch === binding.branch) return { aligned: false, branch: binding.branch }
+    const normalizedRepo = normalizeGitPath(repo)
+    for (const session of ctx.get('sessions')?.list() ?? []) {
+      const cwd = session.header.cwd
+      if (!cwd) continue
+      const path = normalizeGitPath(cwd)
+      if (path !== normalizedRepo && !path.startsWith(`${normalizedRepo}/`)) continue
+      const boundary = session.events.findLast(event => event.type === 'turn/start' || event.type === 'turn/end')
+      if (boundary?.type === 'turn/start') throw new ApiError(409, 'cannot align branches while a session is running in this repository')
+    }
+    const dirty = await git(['status', '--porcelain', '-z'], { cwd: repo, signal })
+    if (!dirty.ok || dirty.stdout.length > 0) throw new ApiError(409, 'automatic branch alignment requires a clean working tree')
+    const target = await git(['show-ref', '--verify', '--', `refs/heads/${binding.branch}`], { cwd: repo, signal })
+    if (!target.ok || binding.branch.startsWith('-')) throw new ApiError(409, 'the bound local branch no longer exists')
+    const checkout = await git(['checkout', '--no-overwrite-ignore', binding.branch], { cwd: repo, signal })
+    if (!checkout.ok) throw new ApiError(409, `cannot align the bound branch: ${checkout.stderr}`)
+    return { aligned: true, branch: binding.branch }
+  }
+
   async function isSessionBlank(sessionId?: string, signal?: AbortSignal): Promise<boolean> {
     if (!sessionId) return true
     try {
@@ -594,6 +638,7 @@ export function mountGitOps(
 
     const branch = typeof data.branch === 'string' ? data.branch.trim() : ''
     if (!branch) throw new ApiError(400, 'branch name is required')
+    await validateBranch(repo, branch, controller.signal)
 
     // Check if session is already locked
     const isBlank = await isSessionBlank(sessionId, controller.signal)
@@ -608,6 +653,7 @@ export function mountGitOps(
     // If requested to create branch
     if (data.createBranch === true) {
       const startPoint = typeof data.startPoint === 'string' ? data.startPoint : undefined
+      validateStartPoint(startPoint)
       const result = await git(['checkout', '-b', branch, ...(startPoint ? [startPoint] : [])], { cwd: repo, signal: controller.signal })
       if (!result.ok) {
         throw new ApiError(400, `创建分支失败: ${result.stderr}`)
@@ -660,6 +706,8 @@ export function mountGitOps(
 
     const checkout = data.checkout !== false
     const startPoint = typeof data.startPoint === 'string' ? data.startPoint.trim() : undefined
+    await validateBranch(repo, name, controller.signal)
+    validateStartPoint(startPoint)
 
     const args = checkout
       ? ['checkout', '-b', name, ...(startPoint ? [startPoint] : [])]
@@ -702,9 +750,10 @@ export function mountGitOps(
 
     const branch = typeof data.branch === 'string' ? data.branch.trim() : (typeof data.name === 'string' ? data.name.trim() : '')
     if (!branch) throw new ApiError(400, 'branch name is required')
+    await validateBranch(repo, branch, controller.signal)
 
     // Check session lock: once a session has started conversation, branch switching is locked
-    if (sessionId && data.force !== true) {
+    if (sessionId && data.force !== true && config().git.sessionBinding === 'strict') {
       const isBlank = await isSessionBlank(sessionId, controller.signal)
       if (!isBlank) {
         const binding = await bindingStore.get(sessionId)
@@ -774,6 +823,7 @@ export function mountGitOps(
     const absoluteTarget = isAbsolute(targetPath) ? resolve(targetPath) : resolve(repo, targetPath)
     const branch = typeof data.branch === 'string' ? data.branch.trim() : (typeof data.name === 'string' ? data.name.trim() : undefined)
     const newBranch = data.newBranch === true
+    if (branch) await validateBranch(repo, branch, controller.signal)
 
     // Verify mutual exclusion: ensure branch is not checked out in another worktree
     if (branch && !newBranch) {
@@ -799,7 +849,7 @@ export function mountGitOps(
     }
 
     let workspaceId: string | undefined
-    const openAsWorkspace = data.openAsWorkspace !== false
+    const openAsWorkspace = typeof data.openAsWorkspace === 'boolean' ? data.openAsWorkspace : config().git.worktreeAutoRegister
     if (openAsWorkspace) {
       try {
         const ws = await ctx.get('workspaceRegistry')?.create(absoluteTarget, basename(absoluteTarget))
@@ -928,75 +978,43 @@ export function mountGitOps(
     if (!repo) throw new ApiError(400, 'Current workspace is not a git repository')
 
     const all = data.all === true
-    const rawPaths = Array.isArray(data.paths) ? (data.paths as unknown[]) : []
-    const paths: string[] = rawPaths.filter((p): p is string => typeof p === 'string' && p.length > 0)
+    if (data.paths !== undefined && (!Array.isArray(data.paths)
+      || !data.paths.every(p => typeof p === 'string' && p.trim().length > 0))) {
+      throw new ApiError(400, 'paths must be a list of non-empty file paths')
+    }
+    const paths = (data.paths ?? []) as string[]
+    if (!all && paths.length === 0) throw new ApiError(400, 'specify paths or explicitly set all: true')
+    for (const path of paths) {
+      const absolute = await containedPath(repo, path, true)
+      if (normalizeGitPath(absolute) === normalizeGitPath(repo)) {
+        throw new ApiError(400, 'use all: true to discard the entire working tree')
+      }
+    }
 
-    if (all || paths.length === 0) {
+    if (all) {
       // Discard all unstaged changes in the working tree:
       // 1. Revert tracked modified files back to index (staged changes remain intact)
-      const checkoutRes = await git(['checkout', '--', '.'], { cwd: repo, signal: controller.signal })
+      const tracked = await git(['ls-files', '-z'], { cwd: repo, signal: controller.signal })
+      if (!tracked.ok) throw new ApiError(400, `cannot inspect tracked files: ${tracked.stderr}`)
+      if (tracked.stdout.length > 0) {
+        const restored = await git(['checkout', '--', '.'], { cwd: repo, signal: controller.signal })
+        if (!restored.ok) throw new ApiError(400, `cannot restore tracked files: ${restored.stderr}`)
+      }
       // 2. Clean all untracked files and directories
       const cleanRes = await git(['clean', '-f', '-d'], { cwd: repo, signal: controller.signal })
-      if (!checkoutRes.ok && !cleanRes.ok) {
-        throw new ApiError(400, `放弃更改失败: ${checkoutRes.stderr || cleanRes.stderr}`)
+      if (!cleanRes.ok) {
+        throw new ApiError(400, `放弃更改失败: ${cleanRes.stderr}`)
       }
     } else {
-      // Query git status to distinguish between tracked and untracked files
-      const statusRes = await git(['status', '--porcelain', '-z'], { cwd: repo, signal: controller.signal })
-      const untrackedSet = new Set<string>()
-      if (statusRes.ok) {
-        const entries = statusRes.stdout.split('\0').filter(Boolean)
-        for (let i = 0; i < entries.length; i++) {
-          const entry = entries[i]
-          if (!entry) continue
-          const code = entry.slice(0, 2)
-          const p = entry.slice(3)
-          if (code === '??' || code === '!!') {
-            untrackedSet.add(p)
-          }
-          if (code[0] === 'R' || code[0] === 'C') {
-            i++ // skip rename original path
-          }
-        }
+      const tracked = await git(['--literal-pathspecs', 'ls-files', '-z', '--', ...paths], { cwd: repo, signal: controller.signal })
+      if (!tracked.ok) throw new ApiError(400, `cannot inspect selected files: ${tracked.stderr}`)
+      if (tracked.stdout.length > 0) {
+        const restored = await git(['--literal-pathspecs', 'checkout', '--', ...tracked.stdout.split('\0').filter(Boolean)], { cwd: repo, signal: controller.signal })
+        if (!restored.ok) throw new ApiError(400, `cannot restore selected files: ${restored.stderr}`)
       }
-
-      const trackedPaths: string[] = []
-      const untrackedPaths: string[] = []
-
-      for (const p of paths) {
-        let isUntracked = untrackedSet.has(p)
-        if (!isUntracked) {
-          const prefix = p.endsWith('/') ? p : `${p}/`
-          for (const u of untrackedSet) {
-            if (u.startsWith(prefix)) {
-              isUntracked = true
-              break
-            }
-          }
-        }
-        if (isUntracked) {
-          untrackedPaths.push(p)
-        } else {
-          trackedPaths.push(p)
-        }
-      }
-
-      if (trackedPaths.length > 0) {
-        const res = await git(['checkout', '--', ...trackedPaths], { cwd: repo, signal: controller.signal })
-        if (!res.ok) {
-          ctx.logger('dsh-ext').warn('git checkout failed for %o: %s', trackedPaths, res.stderr)
-        }
-      }
-
-      if (untrackedPaths.length > 0) {
-        const res = await git(['clean', '-f', '-d', '--', ...untrackedPaths], { cwd: repo, signal: controller.signal })
-        if (!res.ok) {
-          ctx.logger('dsh-ext').warn('git clean failed for %o: %s', untrackedPaths, res.stderr)
-          for (const up of untrackedPaths) {
-            await rm(resolve(repo, up), { recursive: true, force: true }).catch(() => {})
-          }
-        }
-      }
+      // Git protects tracked/ignored files. Never replace a failed clean with recursive rm.
+      const cleaned = await git(['--literal-pathspecs', 'clean', '-f', '-d', '--', ...paths], { cwd: repo, signal: controller.signal })
+      if (!cleaned.ok) throw new ApiError(400, `cannot clean selected files: ${cleaned.stderr}`)
     }
 
     return { ok: true } as GitDiscardResult
@@ -1020,7 +1038,7 @@ export function mountGitOps(
     if (!message) throw new ApiError(400, 'Commit message is required')
 
     const amend = data.amend === true
-    const autoStage = data.autoStage === true || config().git.autoStageAll
+    const autoStage = typeof data.autoStage === 'boolean' ? data.autoStage : config().git.autoStageAll
 
     // If nothing is staged and autoStage is on, stage everything first
     if (autoStage) {
@@ -1455,7 +1473,8 @@ export function mountGitOps(
     }
   }
 
-  return installRoutes(routes, {
+  const handlers: Record<string, ApiHandler> = {
+    '/explorer/git/align': handleAlign,
     // 1. Session-Git Binding Query
     '/explorer/git/binding': handleBinding,
     '/explorer/git/session-binding': handleBinding,
@@ -1503,5 +1522,20 @@ export function mountGitOps(
     // 12. Generate Commit Message via LLM
     '/explorer/git/generate-commit': handleGenerateCommit,
     '/explorer/git/generate-commit-message': handleGenerateCommit,
-  })
+  }
+  const readRoutes = new Set(['binding', 'session-binding', 'branches', 'worktrees'])
+  return installRoutes(routes, Object.fromEntries(Object.entries(handlers).map(([path, handler]) => [
+    path,
+    async (request: Parameters<ApiHandler>[0]) => {
+      if (!readRoutes.has(path.slice(path.lastIndexOf('/') + 1))) {
+        if (request.method !== 'POST') throw new ApiError(405, 'use POST for Git mutations')
+        const data = asRecord(request.body)
+        if (!path.endsWith('/register-workspace')
+          && ![data.workspace, data.workspaceRoot, data.session, data.sessionId].some(value => typeof value === 'string' && value.trim().length > 0)) {
+          throw new ApiError(400, 'an explicit workspace or session is required for Git mutations')
+        }
+      }
+      return handler(request)
+    },
+  ])))
 }

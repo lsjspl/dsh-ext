@@ -61,7 +61,7 @@ await build({
   banner: {
     js: `window.__ModuleLoader__.load({\n\tid: ${JSON.stringify(pkg.name)},\n\tfactory: (require) => {\nvar module = { exports: {} };\nvar exports = module.exports;\n`,
   },
-  footer: { js: `\nreturn module.exports;\n\t}\n});\n` },
+  footer: { js: `\nreturn module.exports;\n\t}\n});` },
 })
 
 console.log('built lib/index.js + lib/client.js')

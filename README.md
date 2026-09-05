@@ -56,7 +56,7 @@
 | **高危操作审核** | 本地规则初筛 + 第二模型复审，拦截/复核 Shell、文件删除等高风险工具调用 | 工具调用中间件、审计面板 |
 | **项目文件浏览器** | 只读浏览工作区目录树、文件预览、未提交变更差异，支持在侧边栏/VS Code/IDEA 中打开 | 会话 Header、可停靠侧边栏 |
 | **Git 版本控制** | AI 生成提交信息、提交/推送、分支管理、Worktree 隔离、会话-分支绑定 | 变更审查面板、输入框 Git 栏 |
-| **会话回收站** | 会话软删除/归档、回收站还原、永久删除、附件 GC | 左侧栏底部 |
+| **会话回收站** | 会话软删除/归档、回收站还原、永久删除；当前宿主不支持安全的附件 GC，附件保留 | 左侧栏底部 |
 | **插件安全与自愈** | 插件隔离名单、一键安全模式、Web 应急救援面板、零依赖 CLI 救援工具 | 设置页、终端 CLI |
 | **按会话检查点** | 基于独立影子 Git 仓库的快照、差异、回滚，支持按轮次/工具调用自动快照 | 会话内变更卡片、设置页 |
 
@@ -113,6 +113,8 @@ dsh plugin --profile web remove dsh-ext
 - 通过 `GIT_DIR` / `GIT_INDEX_FILE` 环境变量把 Git 操作重定向到影子仓库。
 - 回滚采用“向前提交”模型：还原后的状态本身成为新检查点，因此回滚操作也可以被撤销。
 - 严格尊重项目的 `.gitignore`，内置排除 `node_modules/`、构建产物、日志等噪音文件。
+- 保留期清理仅裁剪影子仓库的过期祖先和引用，不移动最新检查点；即使全部过期，也保留一个恢复基线。大小和排除设置即时生效，大文件在写入影子对象库前过滤。
+- 运行中的工作区拒绝回滚；聊天回退先准备分叉，再恢复文件。轮次卡片按会话批量查询，完成后的轮次降低轮询频率，失效检查点会从卡片清除。
 
 ### 2. 高危命令审核（Command Review）
 
@@ -133,6 +135,7 @@ dsh plugin --profile web remove dsh-ext
 - **Web 救援哨兵**：第三方插件在前端初始化失败时，错误页会自动出现“隔离此插件并重载 / 启用安全模式”操作栏。
 - **进程外 CLI**：后端启动失败时，可通过零依赖的 `dsh-ext` CLI 修改 `$DSH_HOME/cordis.patch.yml`，以最高优先级禁用故障插件。
 - **配置防损**：只编辑受管理的注释锚点区间，首次修改自动生成 `.bak-dsh-ext` 备份。
+- **并发保护**：Web 与救援 CLI 共用隔离记录锁，读取、合并与原子写入都在锁内完成，避免覆盖其他请求的隔离项。
 
 ---
 
@@ -265,13 +268,13 @@ dsh-ext:
 | `git.commitLanguage` | `string` | `zh-CN` | 提交信息语言：`zh-CN` / `en` / `auto` |
 | `git.autoStageAll` | `boolean` | `true` | 暂存区为空时是否自动暂存全部改动 |
 | `git.sessionBinding` | `string` | `strict` | 会话与分支绑定模式：`strict` / `prompt` / `off` |
-| `git.autoAlignBranch` | `boolean` | `true` | 切换会话时是否自动对齐绑定分支 |
+| `git.autoAlignBranch` | `boolean` | `true` | 切换会话时自动对齐绑定分支；仅在工作区干净且没有运行中会话时执行，绑定关闭时不执行 |
 | `git.worktreeDirPattern` | `string` | `../{repo}-{branch}` | Worktree 目录命名规则 |
 | `git.worktreeAutoRegister` | `boolean` | `true` | 创建 Worktree 后是否自动注册为 DSH 工作区 |
 | `git.pushAutoSetUpstream` | `boolean` | `true` | 首次推送是否自动设置上游分支 |
 | `git.pushTimeoutSeconds` | `number` | `60` | Git 推送超时时间（秒） |
 | `sessionAdmin.enabled` | `boolean` | `true` | 是否启用会话管理与回收站 |
-| `sessionAdmin.attachmentGc` | `boolean` | `false` | 永久删除会话时是否回收无引用附件 |
+| `sessionAdmin.attachmentGc` | `boolean` | `false` | 兼容保留字段；当前宿主没有安全的附件删除接口，界面禁用且不接受开启请求 |
 | `pluginSafety.enabled` | `boolean` | `true` | 是否启用插件隔离与故障救援 |
 | `pluginSafety.quarantine` | `string[]` | `[]` | 当前被隔离禁用的插件包名列表 |
 | `checkpoints.enabled` | `boolean` | `true` | 是否启用影子 Git 检查点 |
@@ -307,6 +310,7 @@ dsh-ext uninstall <plugin> [--profile <name>]
 2. **Git 环境**：项目差异比对、Git 工作流与检查点功能需要系统安装 `git`，并可从 `PATH` 访问。
 3. **凭证隔离**：DeepSeek API 密钥只在 Node 宿主进程内使用，不会进入浏览器前端状态。
 4. **构建产物**：发布包内置 `lib/index.js`、`lib/client.js` 与 `bin/dsh-ext.mjs`，运行时无需 TypeScript 编译。
+5. **会话永久删除**：仅删除归档且已不在宿主中加载的会话；关闭会话或重启宿主后可重试。删除失败保留回收站记录，批量删除会报告部分失败，不递归删除会话所在目录。
 
 ---
 
@@ -316,7 +320,7 @@ dsh-ext uninstall <plugin> [--profile <name>]
 # 安装依赖
 pnpm install
 
-# 类型检查、解析器单测与 Git 隔离性验证
+# 类型检查、解析器单测、Git 隔离性与安全回归验证
 npm run verify
 
 # 构建 Node 宿主层与浏览器前端层

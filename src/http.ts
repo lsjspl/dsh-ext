@@ -85,13 +85,16 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
  * the Host we were reached on keeps a foreign page from driving these
  * endpoints through the user's own browser.
  */
-function isSameOrigin(req: IncomingMessage): boolean {
+export function isSameOrigin(req: IncomingMessage): boolean {
   const origin = req.headers.origin
-  if (origin === undefined || origin === 'null') return true
+  if (origin === 'null' || req.headers['sec-fetch-site'] === 'cross-site') return false
+  if (origin === undefined) return true
   const host = req.headers.host
   if (host === undefined) return false
   try {
-    return new URL(origin).host === host
+    const url = new URL(origin)
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && url.host === host && url.username === '' && url.password === ''
   } catch {
     return false
   }

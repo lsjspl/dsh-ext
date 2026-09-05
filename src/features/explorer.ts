@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { spawn, exec } from 'node:child_process'
 import { createReadStream, existsSync } from 'node:fs'
-import { readFile, readdir, realpath, stat } from 'node:fs/promises'
+import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep, dirname, basename, extname } from 'node:path'
 import { promisify } from 'node:util'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
@@ -84,7 +84,7 @@ const ALWAYS_HIDDEN = new Set(['.git', 'node_modules', '.venv', '__pycache__', '
  * @param requested - client-supplied workspace-relative path (may be empty).
  * @returns the absolute canonical path to read.
  */
-export async function containedPath(root: string, requested: string): Promise<string> {
+export async function containedPath(root: string, requested: string, allowMissing = false): Promise<string> {
   if (requested.length === 0) return root
   if (requested.includes('\0')) {
     throw new ApiError(400, 'invalid path')
@@ -93,12 +93,35 @@ export async function containedPath(root: string, requested: string): Promise<st
   let real: string
   try {
     real = await realpath(candidate)
-  } catch {
-    throw new ApiError(404, 'no such path in this workspace')
+  } catch (error) {
+    if (!allowMissing || (error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new ApiError(404, 'no such path in this workspace')
+    }
+    // Validate the nearest existing ancestor, including symlinks, for deleted paths.
+    let ancestor = candidate
+    for (;;) {
+      try {
+        await lstat(ancestor)
+        real = resolve(await realpath(ancestor), relative(ancestor, candidate))
+        break
+      } catch (ancestorError) {
+        const parent = dirname(ancestor)
+        if ((ancestorError as NodeJS.ErrnoException).code !== 'ENOENT' || parent === ancestor) {
+          throw new ApiError(404, 'no such path in this workspace')
+        }
+        // An existing dangling link must not be treated as an absent directory.
+        try {
+          if ((await lstat(ancestor)).isSymbolicLink()) throw new ApiError(403, 'unresolved symbolic link')
+        } catch (linkError) {
+          if (linkError instanceof ApiError) throw linkError
+        }
+        ancestor = parent
+      }
+    }
   }
   const rootReal = await realpath(root)
   const rel = relative(rootReal, real)
-  if (rel.startsWith('..') || isAbsolute(rel)) {
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new ApiError(403, 'that path is outside the workspace')
   }
   return real
@@ -924,7 +947,7 @@ function sessionRoot(ctx: Context, sessionId: string): string | undefined {
   // that matters: the explorer is asking on behalf of the session on screen.
   const session = ctx.get('sessions')?.get(sessionId as never) as any
   if (!session) return undefined
-  const cwd = session?.meta?.cwd ?? session?.cwd ?? session?.workspacePath
+  const cwd = session?.header?.cwd
   if (typeof cwd === 'string' && cwd.length > 0) return cwd
   const wsId = session?.meta?.workspaceId ?? session?.workspaceId
   if (typeof wsId === 'string' && wsId.length > 0) {
@@ -1028,9 +1051,13 @@ export async function resolveRoot(
       return { id: found.id, root: found.root }
     }
     // If it is an existing directory path on disk (e.g. worktree not yet in registry):
-    if (existsSync(requestedId)) {
-      return { id: requestedId, root: resolve(requestedId) }
+    if (isAbsolute(requestedId)) {
+      try {
+        const root = await realpath(requestedId)
+        if ((await stat(root)).isDirectory()) return { id: root, root }
+      } catch { /* explicit misses must not fall back to another workspace */ }
     }
+    throw new ApiError(404, 'no such workspace')
   }
 
   // 2. Fall back to session's own root
@@ -1043,6 +1070,7 @@ export async function resolveRoot(
       const known = roots.find(row => row.root === root || normPath(row.root) === rootNorm)
       return { id: known?.id ?? root, root }
     }
+    throw new ApiError(409, 'cannot resolve the workspace for this session')
   }
 
   if (first === undefined) throw new ApiError(409, 'this deployment has no workspace to explore')
@@ -1095,7 +1123,7 @@ export function mountExplorer(
       if (requested === null || requested.length === 0) throw new ApiError(400, 'a path is required')
       // Validate containment before handing the path to git, then pass it after
       // `--` so a path that looks like an option cannot become one.
-      await containedPath(root, requested)
+      await containedPath(root, requested, true)
       const staged = query.get('staged') === '1'
       const result = await git(
         ['diff', ...(staged ? ['--cached'] : []), '--no-color', '--', requested],
@@ -1114,14 +1142,23 @@ export function mountExplorer(
       const { root } = await resolveRoot(ctx, query.get('workspace'), query.get('session'), controller.signal)
       const requested = query.get('path')
       if (requested === null || requested.length === 0) throw new ApiError(400, 'a path is required')
-      const absolute = await containedPath(root, requested)
+      const absolute = await containedPath(root, requested, true)
 
-      // The prior side comes from git — `HEAD:` is the base for both staged and
-      // unstaged work, which is the combined view an IDE's source-control
-      // inline diff shows. A path with no revision (a new file) reads as
-      // `null`, which the diff then draws as one whole addition.
-      const headResult = await git(['show', `HEAD:${requested}`], { cwd: root, signal: controller.signal })
+      const side = query.get('side') ?? 'combined'
+      if (!['staged', 'unstaged', 'combined'].includes(side)) throw new ApiError(400, 'invalid diff side')
+      const repo = await repositoryRoot(root, controller.signal)
+      if (!repo) throw new ApiError(409, 'not a Git repository')
+      const gitPath = relative(repo, resolve(root, requested)).split(sep).join('/')
+      const headResult = await git(['show', `${side === 'unstaged' ? '' : 'HEAD'}:${gitPath}`], { cwd: root, signal: controller.signal })
       const oldText = headResult.ok ? toLf(headResult.stdout) : null
+
+      if (side === 'staged') {
+        const indexed = await git(['show', `:${gitPath}`], { cwd: root, signal: controller.signal })
+        const statResult = await git(['--literal-pathspecs', 'diff', '--cached', '--numstat', '-z', '--', requested], { cwd: root, signal: controller.signal })
+        const counts = statResult.ok ? parseNumstat(statResult.stdout).get(gitPath) : undefined
+        if (oldText?.includes('\0') || indexed.stdout.includes('\0')) return { path: requested, oldText: null, newText: '', isBinary: true }
+        return { path: requested, oldText, newText: indexed.ok ? toLf(indexed.stdout) : '', ...(counts ?? {}) }
+      }
 
       // The current side comes from disk. A file deleted in the worktree reads
       // as empty, drawn as a whole removal — which is the honest review of it.
@@ -1163,7 +1200,7 @@ export function mountExplorer(
       // Header counts for the diff tab: one numstat against HEAD covers both
       // staged and unstaged work; a path git does not track (a brand-new file)
       // counts its lines from the text just read.
-      const countResult = await git(['diff', 'HEAD', '--numstat', '-z', '--', requested], { cwd: root, signal: controller.signal })
+      const countResult = await git(['--literal-pathspecs', 'diff', ...(side === 'combined' ? ['HEAD'] : []), '--numstat', '-z', '--', requested], { cwd: root, signal: controller.signal })
       const counted = countResult.ok ? parseNumstat(countResult.stdout).get(requested) : undefined
       const countedUntracked = counted === undefined && oldText === null && newText.length > 0
         ? { added: lineCount(newText), removed: 0 }

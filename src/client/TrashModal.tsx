@@ -103,6 +103,7 @@ export function TrashModal(props: { open: boolean; onClose: () => void }) {
     const body = confirm.kind === 'all' ? { all: true } : { sessionId: confirm.id }
     setBusy(true)
     void command.run('/sessions/purge', body).finally(() => {
+      list.reload()
       setBusy(false)
       setConfirm(null)
     })

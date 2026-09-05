@@ -25,6 +25,8 @@ export interface BalanceRow {
 }
 
 export interface BalanceView {
+  readonly stale?: boolean
+  readonly error?: string
   /** False when DeepSeek says the account cannot serve requests. */
   readonly available: boolean
   readonly rows: readonly BalanceRow[]
@@ -462,4 +464,3 @@ export interface GenerateCommitResult {
   readonly body?: string
   readonly error?: string
 }
-

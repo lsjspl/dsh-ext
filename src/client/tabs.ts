@@ -16,12 +16,13 @@ export interface Tab {
   readonly id: string
   readonly kind: TabKind
   readonly path?: string
+  readonly side?: 'staged' | 'unstaged'
 }
 
 export interface TabStore {
   readonly tabs: readonly Tab[]
   readonly activeId: string
-  open(kind: TabKind, path?: string): void
+  open(kind: TabKind, path?: string, side?: 'staged' | 'unstaged'): void
   select(id: string): void
   close(id: string): void
 }
@@ -46,8 +47,8 @@ function initial(): TabState {
   }
 }
 
-function tabId(kind: TabKind, path?: string): string {
-  return kind === 'editor' || kind === 'diff' ? `${kind}:${path ?? ''}` : kind
+function tabId(kind: TabKind, path?: string, side?: 'staged' | 'unstaged'): string {
+  return kind === 'editor' || kind === 'diff' ? `${kind}:${path ?? ''}${kind === 'diff' && side ? `:${side}` : ''}` : kind
 }
 
 function parseState(stored: string | null): TabState | undefined {
@@ -62,11 +63,14 @@ function parseState(stored: string | null): TabState | undefined {
       const rawKind = (entry as { kind?: unknown }).kind
       const kind = rawKind === 'changes' ? 'review' : rawKind
       const path = (entry as { path?: unknown }).path
+      const rawSide = (entry as { side?: unknown }).side
+      const side = rawSide === 'staged' || rawSide === 'unstaged' ? rawSide : undefined
       if (kind !== 'files' && kind !== 'review' && kind !== 'editor' && kind !== 'diff') return []
       if ((kind === 'editor' || kind === 'diff') && typeof path !== 'string') return []
       return [{
-        id: tabId(kind, typeof path === 'string' ? path : undefined),
+        id: tabId(kind, typeof path === 'string' ? path : undefined, side),
         kind,
+        side,
         ...(typeof path === 'string' ? { path } : {}),
       }]
     })
@@ -117,14 +121,14 @@ function commit(scope: string, next: TabState): void {
   for (const listener of [...(listeners.get(scope) ?? [])]) listener()
 }
 
-function open(scope: string, kind: TabKind, path?: string): void {
+function open(scope: string, kind: TabKind, path?: string, side?: 'staged' | 'unstaged'): void {
   const now = current(scope)
-  const id = tabId(kind, path)
+  const id = tabId(kind, path, side)
   if (now.tabs.some(tab => tab.id === id)) {
     if (now.activeId !== id) commit(scope, { ...now, activeId: id })
     return
   }
-  const tab: Tab = { id, kind, ...(path === undefined ? {} : { path }) }
+  const tab: Tab = { id, kind, side, ...(path === undefined ? {} : { path }) }
   commit(scope, { tabs: [...now.tabs, tab], activeId: id })
 }
 
@@ -166,7 +170,7 @@ export function useTabs(scope: string | undefined): TabStore {
     }
   }, [key])
 
-  const openBound = useCallback((kind: TabKind, path?: string) => { open(key, kind, path) }, [key])
+  const openBound = useCallback((kind: TabKind, path?: string, side?: 'staged' | 'unstaged') => { open(key, kind, path, side) }, [key])
   const selectBound = useCallback((id: string) => { select(key, id) }, [key])
   const closeBound = useCallback((id: string) => { close(key, id) }, [key])
 

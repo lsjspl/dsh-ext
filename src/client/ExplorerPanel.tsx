@@ -685,7 +685,7 @@ function TabStrip(props: {
       {props.tabs.map(tab => {
         const active = tab.id === props.activeId
         const label = tab.kind === 'editor' || tab.kind === 'diff'
-          ? baseOf(tab.path ?? '')
+          ? `${baseOf(tab.path ?? '')}${tab.side ? ` (${t(tab.side === 'staged' ? 'git.stagedChanges' : 'git.unstagedChanges')})` : ''}`
           : tab.kind === 'files' ? t('explorer.files') : t('explorer.changes')
         return (
           <div
@@ -924,7 +924,7 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
                     status.reload()
                     binding.reload?.()
                   }}
-                  onOpenDiff={(path) => { openPanelTab('diff', path) }}
+                  onOpenDiff={(path, side) => { openPanelTab('diff', path, side) }}
                 />
               )
           )}
@@ -936,7 +936,7 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
             />
           )}
           {active?.kind === 'editor' && active.path !== undefined && <EditorView path={active.path} scope={scope} />}
-          {active?.kind === 'diff' && active.path !== undefined && <DiffView path={active.path} scope={scope} />}
+          {active?.kind === 'diff' && active.path !== undefined && <DiffView path={active.path} scope={scope} side={active.side} />}
         </ViewBoundary>
       </div>
     </div>

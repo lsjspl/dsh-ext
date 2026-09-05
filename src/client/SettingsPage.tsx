@@ -1331,8 +1331,8 @@ export function SettingsPage() {
             >
               <Row
                 label={t('sessions.gc')}
-                hint={t('sessions.gc.hint')}
-                control={<Toggle label={t('sessions.gc')} checked={c.sessionAdmin.attachmentGc} disabled={disabled || !c.sessionAdmin.enabled}
+                hint={t('sessions.gc.unsupported')}
+                control={<Toggle label={t('sessions.gc')} checked={false} disabled
                   onChange={next => { set(['sessionAdmin', 'attachmentGc'], next) }} />}
               />
             </Section>
@@ -1367,5 +1367,4 @@ export function SettingsPage() {
     </div>
   )
 }
-
 

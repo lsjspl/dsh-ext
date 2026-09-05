@@ -94,6 +94,8 @@ export function ComposerImages(props: ComposerImagesProps) {
    */
   const [notice, setNotice] = useState<string | undefined>(undefined)
   const fileInput = useRef<HTMLInputElement | null>(null)
+  const latestInput = useRef({ input, actions })
+  latestInput.current = { input, actions }
 
   useEffect(() => {
     if (notice === undefined) return
@@ -131,13 +133,16 @@ export function ComposerImages(props: ComposerImagesProps) {
    * and a deliberate trailing space is not doubled.
    */
   const insertText = useCallback((text: string): boolean => {
+    const { input, actions } = latestInput.current
     if (actions === undefined || input === undefined) return false
     if (input.phase !== 'plain') return false
     const current = input.draft
     const separator = current.length === 0 || /\s$/.test(current) ? '' : ' '
-    actions.setDraft(`${current}${separator}${text}`)
+    const draft = `${current}${separator}${text}`
+    actions.setDraft(draft)
+    latestInput.current = { input: { ...input, draft }, actions }
     return true
-  }, [actions, input])
+  }, [])
 
   // Publish the rail's verbs for the surfaces that have no way to reach the
   // attachment registry or the draft themselves (see picker-channel.ts).
@@ -156,6 +161,9 @@ export function ComposerImages(props: ComposerImagesProps) {
   const onPicked = useCallback(async (files: FileList | null) => {
     if (files === null || files.length === 0) return
     const picked = [...files]
+    const owner = latestInput.current.actions
+    const snippets: string[] = []
+    let totalBytes = 0
     // Reset first: the same file chosen twice in a row must still fire a change.
     if (fileInput.current !== null) fileInput.current.value = ''
 
@@ -164,6 +172,11 @@ export function ComposerImages(props: ComposerImagesProps) {
 
     for (const file of picked) {
       if (file.type.startsWith('image/')) continue
+      totalBytes += file.size
+      if (file.size > 2 * 1024 * 1024 || totalBytes > 4 * 1024 * 1024) {
+        setNotice(t('files.unreadable', { name: file.name }))
+        continue
+      }
       const text = await file.text().catch(() => undefined)
       // A NUL byte is the test every editor uses for "this is not text"; the
       // extension is not consulted because an unlabelled binary would pass it.
@@ -172,8 +185,11 @@ export function ComposerImages(props: ComposerImagesProps) {
         continue
       }
       const fence = '```'
-      insertText(`\n${fence} ${file.name}\n${text}\n${fence}\n`)
+      snippets.push(`\n${fence} ${file.name}\n${text}\n${fence}\n`)
       setNotice(t('files.notImage', { name: file.name }))
+    }
+    if (snippets.length > 0 && latestInput.current.actions === owner) {
+      if (!insertText(snippets.join('\n'))) setNotice(t('images.busy'))
     }
   }, [onAddImages, insertText, t])
 
@@ -355,5 +371,4 @@ export function ComposerImages(props: ComposerImagesProps) {
     </div>
   )
 }
-
 

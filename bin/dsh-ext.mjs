@@ -31,7 +31,8 @@
  *   dsh-ext uninstall <plugin> [--profile <name>]
  */
 
-import { readFile, writeFile, readdir, rename, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, readdir, rename, mkdir, rm, lstat } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -85,8 +86,9 @@ async function readQuarantine() {
   try {
     const parsed = JSON.parse(await readFile(recordPath, 'utf8'))
     return Array.isArray(parsed?.rows) ? parsed.rows.filter(isRowId) : []
-  } catch {
-    return []
+  } catch (error) {
+    if (error.code === 'ENOENT') return []
+    throw error
   }
 }
 
@@ -128,20 +130,40 @@ function spliceRegion(existing, rows) {
 }
 
 /** Write both files. The patch file first: it is the one the launcher reads. */
-async function writeQuarantine(rows) {
-  const unique = [...new Set(rows.filter(isRowId))].sort()
+async function writeQuarantine(mutate) {
   await mkdir(home, { recursive: true })
   await mkdir(join(home, PLUGIN_DIR), { recursive: true })
-
-  const existing = await readText(patchPath)
-  // A backup on the first write, so a hand-edited patch file is recoverable
-  // even if this tool's splice gets something wrong.
-  if (existing.length > 0 && !existing.includes(BEGIN_MARK)) {
-    await writeFile(`${patchPath}.bak-dsh-ext`, existing, 'utf8')
+  const lockPath = `${recordPath}.lock`
+  const deadline = Date.now() + 10_000
+  for (;;) {
+    try {
+      await writeFile(lockPath, `${process.pid}\n`, { flag: 'wx', mode: 0o600 })
+      break
+    } catch (error) {
+      if (error.code !== 'EEXIST' && !(error.code === 'EPERM' && await lstat(lockPath).then(() => true, () => false))) throw error
+      if (Date.now() >= deadline) throw new Error('Timed out waiting for quarantine writer lock')
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
   }
-  await writeFile(patchPath, spliceRegion(existing, unique), 'utf8')
-  await writeFile(recordPath, JSON.stringify({ rows: unique, updatedAt: Date.now() }, null, 2), 'utf8')
-  return unique
+  try {
+    const unique = [...new Set(mutate(await readQuarantine()).filter(isRowId))].sort()
+    const existing = await readFile(patchPath, 'utf8').catch(error => {
+      if (error.code === 'ENOENT') return ''
+      throw error
+    })
+    // Preserve the first unmanaged patch before replacing its managed region.
+    if (existing.length > 0 && !existing.includes(BEGIN_MARK)) {
+      await writeFile(`${patchPath}.bak-dsh-ext`, existing, 'utf8')
+    }
+    for (const [path, content] of [[patchPath, spliceRegion(existing, unique)], [recordPath, JSON.stringify({ rows: unique, updatedAt: Date.now() }, null, 2)]]) {
+      const temporary = `${path}.${randomUUID()}.tmp`
+      try {
+        await writeFile(temporary, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+        await rename(temporary, path)
+      } finally { await rm(temporary, { force: true }) }
+    }
+    return unique
+  } finally { await rm(lockPath, { force: true }) }
 }
 
 // ── package name → loader row id ───────────────────────────────────────────
@@ -356,11 +378,9 @@ async function commandSkip(names, add, profileName) {
 
   const { resolved, unknown } = await resolveTargets(names, profileName)
   const targetRows = resolved.flatMap(entry => entry.rows)
-  const current = await readQuarantine()
-  const next = add
+  const written = await writeQuarantine(current => add
     ? [...current, ...targetRows]
-    : current.filter(row => !targetRows.includes(row))
-  const written = await writeQuarantine(next)
+    : current.filter(row => !targetRows.includes(row)))
 
   for (const entry of resolved) {
     const detail = entry.rows.join(', ') === entry.name ? '' : ` (row ${entry.rows.join(', ')})`
@@ -382,7 +402,7 @@ async function commandSafe(profileName) {
     process.stdout.write('No third-party plugins with a loader row are installed; nothing to disable.\n')
     return 0
   }
-  const written = await writeQuarantine([...await readQuarantine(), ...third.flatMap(row => row.rows)])
+  const written = await writeQuarantine(current => [...current, ...third.flatMap(row => row.rows)])
   process.stdout.write(`Safe mode: disabled ${third.length} third-party plugin(s).\n`)
   for (const row of third) {
     process.stdout.write(`  ${row.name} → ${row.rows.join(', ')}\n`)
@@ -392,7 +412,7 @@ async function commandSafe(profileName) {
 }
 
 async function commandRestore() {
-  await writeQuarantine([])
+  await writeQuarantine(() => [])
   process.stdout.write('Quarantine cleared; every plugin loads on the next start.\n')
   return 0
 }
@@ -417,7 +437,7 @@ async function commandUninstall(name, profileName) {
   const targetRows = resolved.flatMap(entry => entry.rows)
   // Quarantine first: if the uninstall fails halfway, the next start still
   // comes up without the plugin.
-  await writeQuarantine([...await readQuarantine(), ...targetRows])
+  await writeQuarantine(current => [...current, ...targetRows])
   process.stdout.write(`Quarantined ${name} (row ${targetRows.join(', ')}), then removing it from profile ${profile}…\n`)
 
   const code = await new Promise((done) => {
@@ -439,7 +459,7 @@ async function commandUninstall(name, profileName) {
   }
   // The package is gone, so disable rows naming it are no longer needed — and a
   // stale row would be a puzzle for whoever reinstalls it later.
-  await writeQuarantine((await readQuarantine()).filter(row => !targetRows.includes(row)))
+  await writeQuarantine(current => current.filter(row => !targetRows.includes(row)))
   process.stdout.write(`Removed ${name} and cleared its quarantine entries.\n`)
   return 0
 }

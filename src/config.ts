@@ -162,7 +162,12 @@ export const DEFAULT_READ_PATTERNS: readonly string[] = [
   '^\\s*(Get-ChildItem|Get-Content|Get-Item|Get-Location|Select-String|Test-Path|Resolve-Path|Get-Command)(?:\\s+[^;&|><`$()\\r\\n]*)?\\s*$',
 ]
 
+/** These forms must not be exempted by legacy or user-provided read patterns. */
+export const COMMAND_MUTATION_PATTERN = /\bfind\b[^\r\n]*\s-(?:delete|exec(?:dir)?|ok(?:dir)?|fprint\w*|fls)\b|\bgit\s+(?:branch\s+(?:-[dDmMfFcC]\b|--(?:delete|move|copy|force|set-upstream-to|unset-upstream|edit-description)\b)|remote\s+(?:add|remove|rm|rename|set-url|set-head|set-branches|prune|update)\b)|(?:^|\s)--(?:output|pre|ext-diff|textconv)(?:=|\s|$)/i
+
 export const DEFAULT_DELETE_PATTERNS: readonly string[] = [
+  '\\bfind\\b[^\\r\\n]*\\s-delete\\b',
+  '\\bgit\\s+branch\\s+(?:-[dD]\\b|--delete\\b)',
   '^tool:(delete|remove|unlink|trash|rm)(?:_|\\b)',
   '(?:^|\\n|[;&|]\\s*)rm\\s+(?:-[^\\s]+\\s+)*[^;&|]+',
   '(?:^|\\n|[;&|]\\s*)(del|erase|rmdir|rd)\\s+(?:/[^\\s]+\\s+)*[^;&|]+',
@@ -283,7 +288,7 @@ export const Config: z<Config> = z.object({
 
   sessionAdmin: z.object({
     enabled: z.boolean().default(true).description('Surface the recycle bin and let undo/edit archive the original session.'),
-    attachmentGc: z.boolean().default(false).description('On permanent delete, remove attachment blobs no remaining session references. Scans every session log, so it is off by default.'),
+    attachmentGc: z.boolean().default(false).description('Reserved for compatibility. Unsupported by the current attachment API; attachments are retained.'),
   }),
 
   pluginSafety: z.object({

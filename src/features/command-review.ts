@@ -5,9 +5,9 @@ import { appendFile, mkdir, readFile, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
-import { DEFAULT_DELETE_PATTERNS, DEFAULT_READ_PATTERNS, type Config, type CommandReviewConfig } from '../config.ts'
+import { COMMAND_MUTATION_PATTERN, DEFAULT_DELETE_PATTERNS, DEFAULT_READ_PATTERNS, type Config, type CommandReviewConfig } from '../config.ts'
 import type { AuditEntry, ReviewVerdict } from '../shared/api-contract.ts'
-import { cached, hashText, trimUnresolvedToolCalls } from './llm-cache.ts'
+import { cached, hashText } from './llm-cache.ts'
 
 /**
  * Feature 4 — a second model reviews high-risk tool calls before they run.
@@ -94,6 +94,10 @@ function compilePatterns(patterns: readonly string[], warn: (message: string, de
  * covers the exact classification the hot path uses.
  */
 export function isReadOnlyCommand(command: string, patterns: readonly RegExp[]): boolean {
+  if (COMMAND_MUTATION_PATTERN.test(command)) return false
+  // Branch and remote commands are reads only in their explicit listing forms.
+  if (/^\s*git\s+(branch|remote)\b/i.test(command)
+    && !/^\s*git\s+(?:branch(?:\s+(?:--list|--all|--remotes|--show-current|-[arv]+))*|remote(?:\s+-v)?)\s*$/i.test(command)) return false
   return patterns.some(pattern => {
     pattern.lastIndex = 0
     return pattern.test(command)
@@ -127,6 +131,7 @@ export function deletionPattern(
  * patterns are the fallback for those.
  */
 function isReadOnlyCall(ctx: Context, exec: ToolExecution, command: string, patterns: readonly RegExp[]): boolean {
+  if (COMMAND_MUTATION_PATTERN.test(command)) return false
   try {
     const definition = ctx.get('tools')?.get(exec.name, exec.agent as never)
     if (definition?.isConcurrencySafe?.(exec.arguments) === true) return true
@@ -181,7 +186,7 @@ interface ReviewSession {
  * LLM service, no credential, a timeout, an unparseable answer — because the
  * caller treats them all the same way: apply the configured fallback.
  */
-async function askReviewer(
+export async function askReviewer(
   ctx: Context,
   settings: CommandReviewConfig,
   tool: string,
@@ -190,7 +195,7 @@ async function askReviewer(
   session?: ReviewSession,
 ): Promise<ModelVerdict | undefined> {
   const llm = ctx.get('llm')
-  if (llm === undefined) return undefined
+  if (llm === undefined || callerSignal.aborted || command.length > MAX_REVIEW_CHARS) return undefined
 
   const deadline = new AbortController()
   const timer = setTimeout(() => { deadline.abort() }, settings.timeoutMs)
@@ -198,40 +203,10 @@ async function askReviewer(
   callerSignal.addEventListener('abort', onCallerAbort, { once: true })
 
   try {
-    const excerpt = command.length > MAX_REVIEW_CHARS
-      ? `${command.slice(0, MAX_REVIEW_CHARS)}\n…(truncated)`
-      : command
-
-    const reviewText = `Tool: ${tool}\n\nProposed command:\n\`\`\`\n${excerpt}\n\`\`\``
-
-    // Prefer replaying the live session's warm request prefix (system + tools +
-    // derived history) and appending the review instruction as a trailing user
-    // message. That makes this auxiliary call a prefix-extension of the last
-    // routed request, so the provider's KV/prefix cache is reused instead of
-    // starting a brand-new prefix. Falls back to the short standalone prompt
-    // when there is no live session/header.
-    const header = session?.requestHeader?.()
-    const rawHistory = session?.deriveMessages?.()
-    const history = rawHistory === undefined ? undefined : trimUnresolvedToolCalls(rawHistory)
-    const headerConfig = header?.config
-    const reusePrefix = header !== undefined
-      && headerConfig !== undefined
-      && headerConfig.provider != null
-      && headerConfig.model != null
-      && history !== undefined
-      && history.length > 0
-    const provider = reusePrefix ? headerConfig.provider : settings.provider
-    const model = reusePrefix ? headerConfig.model : settings.model
-    const system = reusePrefix ? header.system : SYSTEM_PROMPT
-    const messages = reusePrefix
-      ? [
-          ...history,
-          { role: 'user', content: [{ type: 'text', text: reviewText }] },
-        ] as never
-      : [{
-          role: 'user',
-          content: [{ type: 'text', text: reviewText }],
-        }] as never
+    const reviewText = `Tool: ${tool}\n\nProposed command:\n\`\`\`\n${command}\n\`\`\``
+    // Safety review has its own model and instructions, independent of chat history.
+    const { provider, model } = settings
+    const messages = [{ role: 'user', content: [{ type: 'text', text: reviewText }] }] as never
 
     // Cache identical review requests for a short window: exact same provider,
     // model, tool, and command text get the previous verdict instead of another
@@ -240,7 +215,9 @@ async function askReviewer(
       provider ?? '',
       model ?? '',
       tool,
-      excerpt,
+      command,
+      session?.id ?? '',
+      SYSTEM_PROMPT,
     ].join('\u0000'))
 
     return await cached<ModelVerdict>(cacheKey, REVIEW_CACHE_TTL_MS, async () => {
@@ -248,18 +225,20 @@ async function askReviewer(
       const stream = llm.stream({
         provider: provider!,
         model: model!,
-        system,
-        ...(reusePrefix && header?.tools !== undefined ? { tools: header.tools as never } : {}),
+        system: SYSTEM_PROMPT,
         messages,
         maxTokens: 300,
         temperature: 0,
-        ...(reusePrefix && session?.id !== undefined ? { sessionId: session.id as never } : {}),
         signal: deadline.signal,
       })
 
       for await (const chunk of stream) {
         if (chunk.type === 'text-delta') answer += chunk.text
+        if (chunk.type === 'finish' && (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted')) {
+          throw new Error('review stream failed')
+        }
       }
+      if (deadline.signal.aborted) throw new Error('review cancelled')
       const verdict = parseVerdict(answer)
       // A stream that failed mid-flight or produced an unparseable answer is a
       // reviewer failure, so it must NOT enter the cache.
@@ -282,22 +261,25 @@ async function askReviewer(
  * lock. Trimming happens on read, and compaction only when the file has grown
  * well past the cap.
  */
-class AuditLog {
+export class AuditLog {
   private pending = Promise.resolve()
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.pending.then(operation)
+    this.pending = result.then(() => {}, error => { this.warn('audit operation failed: %o', error) })
+    return result
+  }
 
   constructor(private readonly file: string, private readonly warn: (message: string, detail: unknown) => void) {}
 
   /** Queue one append. Never awaited by the pipeline — an audit write must not delay a tool call. */
   record(entry: AuditEntry): void {
-    this.pending = this.pending.then(async () => {
+    void this.enqueue(async () => {
       await mkdir(dirname(this.file), { recursive: true, mode: 0o700 })
       await appendFile(this.file, `${JSON.stringify(entry)}\n`, { encoding: 'utf8', mode: 0o600 })
-    }).catch((error: unknown) => {
-      this.warn('command review: could not append to the audit log %o', error)
-    })
+    }).catch(() => { /* logged by the queue */ })
   }
 
-  async read(limit: number): Promise<AuditEntry[]> {
+  private async readRows(): Promise<AuditEntry[]> {
     let text: string
     try {
       text = await readFile(this.file, 'utf8')
@@ -313,19 +295,23 @@ class AuditLog {
     }
     // Newest first, capped.
     rows.reverse()
-    return limit > 0 ? rows.slice(0, limit) : rows
+    return rows
   }
 
-  /** Rewrite the file down to the cap. Called after a read that found it overgrown. */
-  async compact(limit: number): Promise<void> {
-    const rows = await this.read(limit)
-    rows.reverse()
-    const content = rows.map(row => JSON.stringify(row)).join('\n')
-    await writeFileAtomic(this.file, content.length === 0 ? '' : `${content}\n`, { mode: 0o600, dirMode: 0o700 })
+  async read(limit: number): Promise<AuditEntry[]> {
+    return this.enqueue(async () => {
+      const rows = await this.readRows()
+      const selected = limit > 0 ? rows.slice(0, limit) : rows
+      if (limit > 0 && rows.length > limit * 2) {
+        const content = [...selected].reverse().map(row => JSON.stringify(row)).join('\n')
+        await writeFileAtomic(this.file, `${content}\n`, { mode: 0o600, dirMode: 0o700 })
+      }
+      return selected
+    })
   }
 
   async clear(): Promise<void> {
-    await rm(this.file, { force: true })
+    await this.enqueue(() => rm(this.file, { force: true }))
   }
 }
 
@@ -426,7 +412,7 @@ export function mountCommandReview(
 
     // Local screening. In `all` mode every covered call reaches the model, so
     // a miss is not a decision; otherwise a miss means nothing looked risky.
-    if (matched === undefined && settings.mode !== 'all') return await next()
+    if (matched === undefined && settings.mode !== 'all' && !COMMAND_MUTATION_PATTERN.test(command)) return await next()
 
     if (settings.mode === 'rules-only') {
       // No model is consulted, so the pattern hit cannot be adjudicated —
@@ -467,11 +453,6 @@ function commandReviewRoutes(config: () => Config, audit: AuditLog): Record<stri
     '/review/audit': async () => {
       const settings = config().commandReview
       const rows = await audit.read(settings.auditLimit)
-      // Compact lazily: only once the file is well past its cap, so an
-      // ordinary read never rewrites the file.
-      if (settings.auditLimit > 0 && rows.length >= settings.auditLimit) {
-        void audit.compact(settings.auditLimit).catch(() => { /* best effort */ })
-      }
       return { entries: rows, limit: settings.auditLimit }
     },
 

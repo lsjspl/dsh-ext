@@ -99,7 +99,7 @@ function readRows(payload: BalancePayload): BalanceRow[] {
   return rows
 }
 
-export function balanceRoutes(ctx: Context, config: () => Config): Record<string, ApiHandler> {
+export function balanceRoutes(ctx: Context, config: () => Config, timeoutMs = 10_000): Record<string, ApiHandler> {
   // One cached answer, shared by the settings page and the header badge so two
   // surfaces showing the same number cost one request.
   let cached: BalanceView | undefined
@@ -164,18 +164,22 @@ export function balanceRoutes(ctx: Context, config: () => Config): Record<string
       // header badge mounting together must not open two connections.
       if (inFlight === undefined) {
         const controller = new AbortController()
-        // Let fetch complete and populate cache even if one connection closed
-        inFlight = fetchBalance(controller.signal)
-        inFlight
-          .then((value) => { cached = value })
-          .catch(() => { /* handled below */ })
-          .finally(() => { inFlight = undefined })
+        let timer: ReturnType<typeof setTimeout>
+        const deadline = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort()
+            reject(new ApiError(504, 'balance request timed out'))
+          }, timeoutMs)
+        })
+        inFlight = Promise.race([fetchBalance(controller.signal), deadline])
+          .then(value => { cached = value; return value })
+          .finally(() => { clearTimeout(timer); inFlight = undefined })
       }
       try {
         return await inFlight
       } catch (err) {
         // Fallback to cached data if available rather than failing the UI
-        if (cached !== undefined) return cached
+        if (cached !== undefined) return { ...cached, stale: true, error: err instanceof ApiError ? err.message : 'balance refresh failed' }
         throw err
       }
     },

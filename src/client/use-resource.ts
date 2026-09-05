@@ -23,11 +23,13 @@ export function useResource<T>(route: string, enabled = true): Resource<T> {
   const [error, setError] = useState<string | undefined>(undefined)
   const [loading, setLoading] = useState(false)
   const [nonce, setNonce] = useState(0)
+  const [resultRoute, setResultRoute] = useState(route)
 
   useEffect(() => {
     if (!enabled) {
       setData(undefined)
       setError(undefined)
+      setLoading(false)
       return
     }
     const controller = new AbortController()
@@ -35,11 +37,13 @@ export function useResource<T>(route: string, enabled = true): Resource<T> {
     void (async () => {
       const result = await callApi<T>(route, { signal: controller.signal })
       if (controller.signal.aborted) return
+      setResultRoute(route)
       setLoading(false)
       if (result.ok) {
         setData(result.value)
         setError(undefined)
       } else if (result.message !== 'cancelled') {
+        setData(undefined)
         setError(result.message)
       }
     })()
@@ -47,7 +51,12 @@ export function useResource<T>(route: string, enabled = true): Resource<T> {
   }, [route, enabled, nonce])
 
   const reload = useCallback(() => { setNonce(value => value + 1) }, [])
-  return useMemo(() => ({ data, error, loading, reload }), [data, error, loading, reload])
+  return useMemo(() => ({
+    data: enabled && resultRoute === route ? data : undefined,
+    error: enabled && resultRoute === route ? error : undefined,
+    loading: enabled && (resultRoute !== route || loading),
+    reload,
+  }), [data, error, loading, reload, route, resultRoute, enabled])
 }
 
 export interface Command {

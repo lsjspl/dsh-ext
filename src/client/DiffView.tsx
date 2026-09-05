@@ -370,11 +370,11 @@ export function CodeView(props: { path: string; content: string }) {
  * @param path - workspace-relative path of the reviewed file.
  * @param scope - serialized `workspace`/`session` query parameters.
  */
-export function DiffView(props: { path: string; scope: string }) {
+export function DiffView(props: { path: string; scope: string; side?: 'staged' | 'unstaged' }) {
   const t = useT()
   injectDiffStyles()
   const review = useResource<ReviewDiff>(
-    `/explorer/review?path=${encodeURIComponent(props.path)}${props.scope.length === 0 ? '' : `&${props.scope}`}`,
+    `/explorer/review?path=${encodeURIComponent(props.path)}${props.scope.length === 0 ? '' : `&${props.scope}`}${props.side ? `&side=${props.side}` : ''}`,
   )
 
   const data = review.data

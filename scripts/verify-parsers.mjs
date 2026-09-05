@@ -146,6 +146,11 @@ check('a write command is reviewed', mod.isReadOnlyCommand('rm -rf dist', readPa
 check('output redirection is reviewed', mod.isReadOnlyCommand('cat a.txt > b.txt', readPatterns), false)
 check('a read followed by a write is reviewed', mod.isReadOnlyCommand('git status && rm -rf dist', readPatterns), false)
 check('a pipe is reviewed', mod.isReadOnlyCommand('cat a.txt | sh', readPatterns), false)
+for (const command of ['find . -delete', 'find . -exec touch file +', 'find . -fprint output', 'git branch -D feature', 'git branch -f main HEAD', 'git remote set-url origin https://example.invalid/repo', 'git diff --output=patch.txt', 'rg --pre processor pattern']) {
+  check(`mutation is not a read: ${command}`, mod.isReadOnlyCommand(command, readPatterns), false)
+}
+check('branch listing is read-only', mod.isReadOnlyCommand('git branch --list', readPatterns), true)
+check('remote listing is read-only', mod.isReadOnlyCommand('git remote -v', readPatterns), true)
 
 process.stdout.write('\nabsolute deletion classification:\n')
 const deletePatterns = mod.DEFAULT_DELETE_PATTERNS.map(source => new RegExp(source, 'i'))
@@ -163,6 +168,8 @@ check('JavaScript unlink is denied', isDelete('run_code', "fs.unlink('x')"), tru
 check('Python rmtree is denied', isDelete('run_code', "shutil.rmtree('dist')"), true)
 check('a normal read remains allowed', isDelete('bash', 'git status'), false)
 check('plain prose saying remove is not a delete operation', isDelete('search', 'docs about how to remove whitespace'), false)
+check('find deletion is denied', isDelete('bash', 'find . -delete'), true)
+check('branch deletion is denied', isDelete('bash', 'git branch -D feature'), true)
 
 process.stdout.write('\nreviewer verdict parsing:\n')
 

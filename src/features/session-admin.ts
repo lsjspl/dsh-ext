@@ -2,9 +2,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { SessionHeader } from '@deepseek-ai/dsh-session/types'
-import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
-import { rm, stat } from 'node:fs/promises'
-import { basename, dirname } from 'node:path'
+import { lstat, rm, stat } from 'node:fs/promises'
+import { isAbsolute } from 'node:path'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
 import type { Config } from '../config.ts'
 import type { SessionRow, TrashRow } from '../shared/api-contract.ts'
@@ -62,8 +61,10 @@ interface RegistryInternal extends RegistryStateSurface {
   requireState(): WorkspaceDomainInternal
   /** Persist and install a new full state. Both memory and disk. */
   setState(state: WorkspaceDomainInternal): Promise<void>
+  enqueueOperation<T>(operation: () => Promise<T>): Promise<T>
   list?(): any[]
   resolveByPath?(path: string): Promise<any>
+  create(path: string): Promise<any>
 }
 
 /** The durable global shape, structural; the registry validates via zod at its own boundary. */
@@ -202,6 +203,15 @@ export function mountSessionAdmin(
   routes: Record<string, ApiHandler>,
 ): () => void {
   const log = ctx.logger('dsh-ext')
+  if (config().sessionAdmin.attachmentGc) {
+    log.warn('attachmentGc is unsupported by this host; attachment files will be retained')
+  }
+  let mutations = Promise.resolve()
+  function serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = mutations.then(operation)
+    mutations = result.then(() => {}, () => {})
+    return result
+  }
 
   /**
    * The live registry, narrowed to the archive-set surface this feature needs.
@@ -238,10 +248,12 @@ export function mountSessionAdmin(
    */
   async function removeFromArchive(sessionId: string): Promise<void> {
     const reg = registry()
-    const state = reg.requireState()
-    const next = state.archivedSessionIds.filter(id => id !== sessionId)
-    if (next.length === state.archivedSessionIds.length) return // already absent: no-op
-    await reg.setState({ ...state, archivedSessionIds: next })
+    await reg.enqueueOperation(async () => {
+      const state = reg.requireState()
+      const next = state.archivedSessionIds.filter(id => id !== sessionId)
+      if (next.length === state.archivedSessionIds.length) return
+      await reg.setState({ ...state, archivedSessionIds: next })
+    })
   }
 
   /**
@@ -318,11 +330,11 @@ export function mountSessionAdmin(
       return { sessions: rows, trash: await readArchivedRows(located, controller.signal), titleBudget: TITLE_BUDGET }
     },
 
-    '/sessions/restore': async ({ body, method }) => {
+    '/sessions/restore': async ({ body, method }) => serialize(async () => {
       if (method !== 'POST') throw new ApiError(405, 'use POST to restore a session')
       if (!config().sessionAdmin.enabled) throw new ApiError(404, 'session administration is switched off')
       const sessionId = requireString((body as { sessionId?: unknown } | undefined)?.sessionId, 'sessionId')
-      await removeFromArchive(sessionId)
+      await findSession(sessionId, new AbortController().signal)
 
       // Ensure the session is accounted in its workspace so it appears in the sidebar
       try {
@@ -341,26 +353,28 @@ export function mountSessionAdmin(
           const located = await locateSessions(ctx, new AbortController().signal)
           const match = located.find(row => String(row.header.id) === sessionId)
           if (match?.header.cwd) {
-            const ws = await reg.resolveByPath?.(match.header.cwd)
-            if (ws && typeof ws.attachSession === 'function') {
-              await ws.attachSession(sessionId)
-            }
+            const ws = await reg.resolveByPath?.(match.header.cwd) ?? await reg.create(match.header.cwd)
+            if (!ws || typeof ws.attachSession !== 'function') throw new Error('workspace cannot attach sessions')
+            await ws.attachSession(sessionId)
+          } else {
+            throw new Error('session has no workspace path')
           }
         }
       } catch (e) {
         log.warn('restore re-attachment check failed: %s', String(e))
+        throw new ApiError(409, 'could not restore workspace membership; the session remains archived')
       }
 
+      await removeFromArchive(sessionId)
       log.info('restored session %s', sessionId)
       return { restored: sessionId, reloadRequired: false }
-    },
+    }),
 
-    '/sessions/purge': async ({ body, method, req }) => {
+    '/sessions/purge': async ({ body, method }) => serialize(async () => {
       if (method !== 'POST') throw new ApiError(405, 'use POST to purge a session')
       if (!config().sessionAdmin.enabled) throw new ApiError(404, 'session administration is switched off')
       const request = body as { sessionId?: unknown; all?: unknown } | undefined
       const controller = new AbortController()
-      req.on('close', () => { controller.abort() })
 
       const reg = registry()
       const rawReg = reg as any
@@ -371,100 +385,50 @@ export function mountSessionAdmin(
       } else {
         targets = [requireString(request?.sessionId, 'sessionId')]
       }
-
-      // 1. Detach from all workspaces.
-      // In DSH, a session is visible in the sidebar if it is in workspace.sessionIds and NOT in archivedSessionIds.
-      // Previously, purging removed the session from archivedSessionIds without detaching it from the workspace.
-      // As a result, the session immediately became "unarchived" and bounced back into the sidebar list!
-      // Detaching it from the workspace updates both memory and durable storage, and emits host/workspace-changed
-      // so the session will never return to the sidebar.
+      if (targets.some(id => !archived.includes(id))) throw new ApiError(409, 'only archived sessions can be purged')
+      // A storage failure is NOT an empty inventory. Resolve before changing membership.
+      const located = await locateSessions(ctx, controller.signal)
       const entities = rawReg.entities as Map<string, any> | undefined
       const workspaces = entities !== undefined ? Array.from(entities.values()) : (reg.list?.() ?? [])
-      for (const entity of workspaces) {
-        for (const target of targets) {
-          try {
+      const purged: string[] = []
+      const failed: string[] = []
+      for (const target of targets) {
+        try {
+          // Only the host owner has the capability to drain/dispose a live session.
+          if (ctx.get('sessions')?.get(target as never) || ctx.get('agents')?.get(target as never)) {
+            throw new Error('session is still loaded; close it or restart the host before purging')
+          }
+          const match = located.find(row => String(row.header.id) === target)
+          if (match !== undefined) {
+            if (!isAbsolute(match.path)) throw new Error('persistence returned a non-absolute artifact path')
+            const info = await lstat(match.path).catch((error: NodeJS.ErrnoException) => {
+              if (error.code === 'ENOENT') return undefined
+              throw error
+            })
+            if (info !== undefined && !info.isFile()) throw new Error('session artifact is not a regular file')
+          }
+          for (const entity of workspaces) {
             if (entity.record?.sessionIds?.includes(target)) {
               await entity.detachSession(target)
             }
-          } catch (e) {
-            log.warn('failed to detach session %s from workspace %s: %s', target, entity.id, String(e))
-            try {
-              const table = rawReg.table ?? rawReg.requireTable?.()
-              if (table) {
-                await table.update(entity.id, (record: any) => ({
-                  ...record,
-                  sessionIds: record.sessionIds.filter((id: any) => String(id) !== target),
-                  updatedAt: new Date().toISOString(),
-                }))
-              }
-            } catch (e2) {
-              log.warn('fallback table update failed: %s', String(e2))
-            }
           }
-        }
-      }
-
-      // 2. Detach live agent and session if present in memory
-      const sessions = ctx.get('sessions') as any
-      const agents = ctx.get('agents') as any
-      for (const target of targets) {
-        try {
-          const liveAgent = agents?.store?.get(target)
-          if (typeof liveAgent?.detach === 'function') liveAgent.detach()
-        } catch { /* ignore */ }
-        try {
-          const liveSession = sessions?.store?.get(target)
-          if (typeof liveSession?.detach === 'function') liveSession.detach()
-        } catch { /* ignore */ }
-      }
-
-      // 3. Clean up in-memory caches in WorkspaceRegistry
-      for (const target of targets) {
-        try {
+          if (match !== undefined) await rm(match.path, { force: true })
+          // Membership is cleared only after the artifact deletion succeeds.
+          await removeFromArchive(target)
           rawReg.headers?.delete(target)
           rawReg.sessionPaths?.delete(target)
           rawReg.invalidSessionPaths?.delete(target)
-        } catch { /* ignore */ }
-      }
-
-      // 4. Invalidate persistence coordinator prepared sessions cache
-      const persistence = ctx.get('sessionPersistence') as any
-      for (const target of targets) {
-        try {
+          const persistence = ctx.get('sessionPersistence') as any
           persistence?.coordinator?.preparations?.invalidate?.(target)
-        } catch { /* ignore */ }
-      }
-
-      // 5. Delete physical artifact files and directories from disk
-      try {
-        const located = await locateSessions(ctx, controller.signal)
-        for (const target of targets) {
-          const match = located.find(row => String(row.header.id) === target)
-          if (match !== undefined) {
-            try {
-              await rm(match.path, { force: true, recursive: true })
-              const parentDir = dirname(match.path)
-              if (basename(parentDir) === target) {
-                await rm(parentDir, { force: true, recursive: true })
-              }
-            } catch (e) {
-              log.warn('failed to remove session artifact at %s: %s', match.path, String(e))
-            }
-          }
+          purged.push(target)
+        } catch (error) {
+          log.warn('failed to purge session %s: %o', target, error)
+          failed.push(`${target}: ${error instanceof Error ? error.message : String(error)}`)
         }
-      } catch (e) {
-        log.warn('locateSessions failed during purge: %s', String(e))
       }
-
-      // 6. Drop the ids from archivedSessionIds in durable state
-      const state = reg.requireState()
-      await reg.setState({
-        ...state,
-        archivedSessionIds: state.archivedSessionIds.filter(id => !targets.includes(String(id))),
-      })
-
-      log.info('purged %d archived session(s)', targets.length)
-      return { purged: targets.length, reloadRequired: false }
-    },
+      if (failed.length > 0) throw new ApiError(409, `Purged ${purged.length}; failed ${failed.length}. ${failed.join('; ')}`)
+      log.info('purged %d archived session(s)', purged.length)
+      return { purged: purged.length, reloadRequired: false }
+    }),
   })
 }

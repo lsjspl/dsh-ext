@@ -3,9 +3,13 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
+import { resolve, sep } from 'node:path'
 import { ApiError, installRoutes, type ApiHandler } from '../http.ts'
 import { CheckpointStore } from '../checkpoint-store.ts'
 import type { Config } from '../config.ts'
+
+// Shared across remounts so toggling settings cannot create a second writer.
+const checkpointQueues = new Map<string, Promise<unknown>>()
 
 /**
  * Feature 8 — per-session rollback of the agent's file changes.
@@ -287,13 +291,10 @@ export function mountCheckpoints(
   checkpointRoot: string,
 ): () => void {
   const log = ctx.logger('dsh-ext')
-  const settings = config().checkpoints
-  const store = new CheckpointStore(checkpointRoot, settings.excludes, settings.maxFileSizeMb)
+  const store = new CheckpointStore(checkpointRoot, () => config().checkpoints.excludes, () => config().checkpoints.maxFileSizeMb)
 
   /** Sessions already checkpointed during the current turn, for `snapshotOn: 'turn'`. */
-  const turnSnapshots = new Set<string>()
-  /** Serializes snapshots per workspace: two concurrent tool calls must not stage at once. */
-  const queues = new Map<string, Promise<unknown>>()
+  const turnSnapshots = new Map<string, Promise<void>>()
 
   /**
    * Cache for turnChanges results to avoid expensive git operations on every poll.
@@ -309,6 +310,8 @@ export function mountCheckpoints(
     refsHash: string
   }
   const turnChangesCache = new Map<string, TurnChangesCache>()
+  const sessionRefsCache = new Map<string, { until: number; value: Promise<{ refs: Map<number, string>; endRefs: Map<number, string> }> }>()
+  const turnRequests = new WeakMap<object, AbortController>()
   const TURN_CHANGES_TTL = 30_000 // 30 seconds
 
   function turnChangesCacheKey(workTree: string, sessionId: string, turn: number): string {
@@ -320,6 +323,9 @@ export function mountCheckpoints(
   }
 
   function invalidateTurnChangesCache(workTree: string): void {
+    for (const key of sessionRefsCache.keys()) {
+      if (key.startsWith(`${workTree}\n`)) sessionRefsCache.delete(key)
+    }
     // When a new checkpoint is taken, invalidate all cached results for this workspace
     for (const key of turnChangesCache.keys()) {
       if (key.startsWith(`${workTree}\n`)) {
@@ -329,9 +335,15 @@ export function mountCheckpoints(
   }
 
   function serialize<T>(workTree: string, operation: () => Promise<T>): Promise<T> {
-    const previous = queues.get(workTree) ?? Promise.resolve()
+    const absolute = resolve(workTree)
+    const key = process.platform === 'win32' ? absolute.toLowerCase() : absolute
+    const previous = checkpointQueues.get(key) ?? Promise.resolve()
     const next = previous.then(operation, operation)
-    queues.set(workTree, next.catch(() => undefined))
+    const settled = next.then(() => {}, () => {})
+    checkpointQueues.set(key, settled)
+    void settled.then(() => {
+      if (checkpointQueues.get(key) === settled) checkpointQueues.delete(key)
+    })
     return next
   }
 
@@ -347,32 +359,33 @@ export function mountCheckpoints(
     return messagePositionOfEvents(inspection.events, messageId)
   }
 
-  /** The fork lineage fields of one session: live header first, durable header as fallback. */
+  /** Resolve the event prefix inherited by a child, not a count of turns. */
   async function sessionLineage(
     sessionId: string,
     signal?: AbortSignal,
-  ): Promise<{ parentSession: string | undefined; seedLength: number | undefined }> {
+  ): Promise<{ parentSession?: string; inheritedTurns: ReadonlySet<number> }> {
     const live = ctx.get('sessions')?.get(sessionId as never) as {
       header?: { parentSession?: unknown; seedLength?: unknown }
+      events?: readonly { type: string; data?: { turn?: unknown } }[]
     } | undefined
-    const fromLive = live?.header
-    if (fromLive !== undefined) {
-      return {
-        parentSession: typeof fromLive.parentSession === 'string' ? fromLive.parentSession : undefined,
-        seedLength: typeof fromLive.seedLength === 'number' ? fromLive.seedLength : undefined,
-      }
-    }
-    const persistence = ctx.get('sessionPersistence')
-    if (persistence === undefined) return { parentSession: undefined, seedLength: undefined }
     try {
-      const inspection = await persistence.inspect(sessionId as never, signal)
-      const header = inspection.meta
+      const inspection = live?.header && live.events ? undefined : await ctx.get('sessionPersistence')?.inspect(sessionId as never, signal)
+      const header = inspection?.meta ?? live?.header
+      const events = inspection?.events ?? live?.events ?? []
+      const inheritedTurns = new Set<number>()
+      const length = header?.seedLength
+      if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return { inheritedTurns }
+      for (const event of events.slice(0, length)) {
+        if (event.type === 'turn/end' && typeof (event.data as { turn?: unknown })?.turn === 'number') {
+          inheritedTurns.add((event.data as { turn: number }).turn)
+        }
+      }
       return {
-        parentSession: typeof header.parentSession === 'string' ? header.parentSession : undefined,
-        seedLength: typeof header.seedLength === 'number' ? header.seedLength : undefined,
+        parentSession: typeof header?.parentSession === 'string' ? header.parentSession : undefined,
+        inheritedTurns,
       }
     } catch {
-      return { parentSession: undefined, seedLength: undefined }
+      return { inheritedTurns: new Set() }
     }
   }
 
@@ -384,7 +397,7 @@ export function mountCheckpoints(
    * a rollback switches the chat to a forked branch, the child's own ref
    * namespace is empty and every inherited turn must be resolved through the
    * parent chain. A parent's ref counts only for turns the child actually
-   * inherited (at or below that child's `seedLength`), and the child's own
+   * inherited (closed turns in the child's seeded event prefix), and the child's own
    * refs always win for turns it checkpointed itself.
    */
   async function mergedTurnRefs(
@@ -394,15 +407,17 @@ export function mountCheckpoints(
   ): Promise<Map<number, string>> {
     const merged = new Map<number, string>()
     let current: string | undefined = sessionId
-    let inheritedLimit = Number.POSITIVE_INFINITY
-    for (let depth = 0; current !== undefined && depth < 8; depth += 1) {
+    let allowed: ReadonlySet<number> | undefined
+    const visited = new Set<string>()
+    while (current !== undefined && !visited.has(current)) {
+      visited.add(current)
       const refs = await store.turnRefs(workTree, current, signal)
       for (const [turn, id] of refs) {
-        if (turn > inheritedLimit) continue
+        if (allowed !== undefined && !allowed.has(turn)) continue
         if (!merged.has(turn)) merged.set(turn, id)
       }
       const lineage = await sessionLineage(current, signal)
-      inheritedLimit = lineage.seedLength ?? Number.POSITIVE_INFINITY
+      allowed = new Set([...lineage.inheritedTurns].filter(turn => allowed === undefined || allowed.has(turn)))
       current = lineage.parentSession
     }
     return merged
@@ -420,18 +435,34 @@ export function mountCheckpoints(
   ): Promise<Map<number, string>> {
     const merged = new Map<number, string>()
     let current: string | undefined = sessionId
-    let inheritedLimit = Number.POSITIVE_INFINITY
-    for (let depth = 0; current !== undefined && depth < 8; depth += 1) {
+    let allowed: ReadonlySet<number> | undefined
+    const visited = new Set<string>()
+    while (current !== undefined && !visited.has(current)) {
+      visited.add(current)
       const refs = await store.turnEndRefs(workTree, current, signal)
       for (const [turn, id] of refs) {
-        if (turn > inheritedLimit) continue
+        if (allowed !== undefined && !allowed.has(turn)) continue
         if (!merged.has(turn)) merged.set(turn, id)
       }
       const lineage = await sessionLineage(current, signal)
-      inheritedLimit = lineage.seedLength ?? Number.POSITIVE_INFINITY
+      allowed = new Set([...lineage.inheritedTurns].filter(turn => allowed === undefined || allowed.has(turn)))
       current = lineage.parentSession
     }
     return merged
+  }
+
+  function sessionRefs(workTree: string, sessionId: string) {
+    const key = `${workTree}\n${sessionId}`
+    const hit = sessionRefsCache.get(key)
+    if (hit && hit.until > Date.now()) return hit.value
+    const signal = AbortSignal.timeout(20_000)
+    const value = Promise.all([mergedTurnRefs(workTree, sessionId, signal), mergedTurnEndRefs(workTree, sessionId, signal)])
+      .then(([refs, endRefs]) => ({ refs, endRefs }))
+    const entry = { until: Date.now() + 5_000, value }
+    if (sessionRefsCache.size >= 100) sessionRefsCache.delete(sessionRefsCache.keys().next().value!)
+    sessionRefsCache.set(key, entry)
+    void value.catch(() => { if (sessionRefsCache.get(key) === entry) sessionRefsCache.delete(key) })
+    return value
   }
 
   /** The checkpoint created before this turn's first mutation. */
@@ -476,26 +507,26 @@ export function mountCheckpoints(
       const workTree = workTreeOf(ctx, exec)
       const turn = turnOf(exec)
 
-      if (current.snapshotOn === 'turn') {
-        // Turn is part of the key: clearing on a sentinel tool name (`stop`) is
-        // not a turn boundary and left later turns permanently coalesced. The
-        // event-derived turn is the real boundary, so every mutating answer gets
-        // exactly one pre-mutation checkpoint.
-        const key = `${workTree}\0${sessionId}\0${turn ?? `call:${String(exec.rootCallId)}`}`
-        if (turnSnapshots.has(key)) return await next()
-        turnSnapshots.add(key)
-      }
-
-      await serialize(workTree, async () => {
-        const snapshot = await store.snapshot(workTree, sessionId, turnLabel(turn, exec.name))
-        if (turn !== undefined) {
-          await store.linkTurn(workTree, sessionId, turn, snapshot.id)
-          const anchorSeq = turnSeqOf(exec)
-          if (anchorSeq !== undefined) await store.linkAnchor(workTree, sessionId, snapshot.id, anchorSeq)
+      const key = `${workTree}\0${sessionId}\0${turn ?? `call:${String(exec.rootCallId)}`}`
+      let pending = current.snapshotOn === 'turn' ? turnSnapshots.get(key) : undefined
+      if (pending === undefined) {
+        pending = serialize(workTree, async () => {
+          const snapshot = await store.snapshot(workTree, sessionId, turnLabel(turn, exec.name))
+          if (turn !== undefined) {
+            await store.linkTurn(workTree, sessionId, turn, snapshot.id)
+            const anchorSeq = turnSeqOf(exec)
+            if (anchorSeq !== undefined) await store.linkAnchor(workTree, sessionId, snapshot.id, anchorSeq)
+          }
+          invalidateTurnChangesCache(workTree)
+        })
+        if (current.snapshotOn === 'turn') {
+          turnSnapshots.set(key, pending)
+          void pending.catch(() => {
+            if (turnSnapshots.get(key) === pending) turnSnapshots.delete(key)
+          })
         }
-        // Invalidate turnChanges cache when a new checkpoint is created
-        invalidateTurnChangesCache(workTree)
-      })
+      }
+      await pending
     } catch (error: unknown) {
       log.warn('checkpoints: snapshot before %s failed: %o', exec.name, error)
     }
@@ -521,14 +552,14 @@ export function mountCheckpoints(
 
       // Only turns that actually took a pre-mutation checkpoint should also get
       // an end checkpoint. This keeps the ref namespace free of no-op turns.
-      const pre = await store.resolveTurn(workTree, sessionId, turn)
-      if (pre === undefined) return
-
       await serialize(workTree, async () => {
+        const pre = await store.resolveTurn(workTree, sessionId, turn)
+        if (pre === undefined) return
         const snapshot = await store.snapshot(workTree, sessionId, `turn:${turn} end`)
         await store.linkTurnEnd(workTree, sessionId, turn, snapshot.id)
         invalidateTurnChangesCache(workTree)
       })
+      turnSnapshots.delete(`${workTree}\0${sessionId}\0${turn}`)
     } catch (error: unknown) {
       log.warn('checkpoints: turn-end snapshot for turn %s failed: %o', turn, error)
     }
@@ -594,8 +625,13 @@ export function mountCheckpoints(
       if (turn === undefined && seq === undefined) throw new ApiError(400, 'a turn number or an event seq is required')
       if (turn !== undefined && (!Number.isSafeInteger(turn) || turn < 0)) throw new ApiError(400, 'a turn number is required')
       if (seq !== undefined && !Number.isSafeInteger(seq)) throw new ApiError(400, 'an event seq is required')
-      const controller = new AbortController()
-      req.on('close', () => { controller.abort() })
+      let controller = turnRequests.get(req)
+      if (!controller) {
+        controller = new AbortController()
+        turnRequests.set(req, controller)
+        const current = controller
+        req.on('close', () => { current.abort() })
+      }
       const workTree = await requireWorkspace(ctx, query.get('workspace'), sessionId, controller.signal)
 
       // seq addressing: the durable log maps the message's event seq to its
@@ -621,13 +657,15 @@ export function mountCheckpoints(
       // repository, resolved across the session's fork lineage in one batched
       // ref read, and the turn's open/closed state arrives from the chat's own
       // TurnLocation on the client.
-      const refs = await mergedTurnRefs(workTree, sessionId, controller.signal)
+      const { refs, endRefs } = await sessionRefs(workTree, sessionId)
       if (resolvedTurn === undefined) throw new ApiError(400, 'a turn number is required')
+      const live = ctx.get('sessions')?.get(sessionId as never)
+      const closed = endRefs.has(resolvedTurn) || live?.events?.some(event => event.type === 'turn/end' && event.data.turn === resolvedTurn) === true
       const checkpointId = refs.get(resolvedTurn)
       if (checkpointId === undefined) {
         const payload = {
           turn: resolvedTurn,
-          closed: true,
+          closed,
           question: undefined as string | undefined,
           undoAnchorSeq: undefined as number | undefined,
           checkpointId: undefined,
@@ -651,9 +689,8 @@ export function mountCheckpoints(
       // CACHING FIX: Check cache before expensive turnChanges computation.
       // The cache key includes workTree, sessionId, and turn. We also track
       // the refs hash to detect when a new checkpoint invalidates the cache.
-      const endRefs = await mergedTurnEndRefs(workTree, sessionId, controller.signal)
       const cacheKey = turnChangesCacheKey(workTree, sessionId, resolvedTurn)
-      const currentRefsHash = `${refsMapHash(refs)}|${refsMapHash(endRefs)}`
+      const currentRefsHash = `${refsMapHash(refs)}|${refsMapHash(endRefs)}|${JSON.stringify(config().checkpoints)}`
       const cached = turnChangesCache.get(cacheKey)
       const now = Date.now()
 
@@ -665,7 +702,11 @@ export function mountCheckpoints(
         changes = cached.result
       } else {
         // Cache miss or stale: compute and cache
-        changes = await store.turnChanges(workTree, refs, endRefs, resolvedTurn, controller.signal)
+        changes = await serialize(workTree, () => store.turnChanges(workTree, refs, endRefs, resolvedTurn!, controller.signal))
+        if (turnChangesCache.size >= 500) {
+          const oldest = turnChangesCache.keys().next().value
+          if (oldest !== undefined) turnChangesCache.delete(oldest)
+        }
         turnChangesCache.set(cacheKey, {
           result: changes,
           timestamp: now,
@@ -675,7 +716,7 @@ export function mountCheckpoints(
 
       const payload = {
         turn: resolvedTurn,
-        closed: true,
+        closed,
         question: undefined as string | undefined,
         undoAnchorSeq: undefined as number | undefined,
         checkpointId,
@@ -724,7 +765,7 @@ export function mountCheckpoints(
       const controller = new AbortController()
       req.on('close', () => { controller.abort() })
       const workTree = await requireWorkspace(ctx, query.get('workspace'), query.get('session') ?? undefined, controller.signal)
-      const { affected, unprotected } = await store.preview(workTree, id, controller.signal)
+      const { affected, unprotected } = await serialize(workTree, () => store.preview(workTree, id, controller.signal))
       return { checkpointId: id, workspace: workTree, affected, unprotected }
     },
 
@@ -754,7 +795,20 @@ export function mountCheckpoints(
       req.on('close', () => { controller.abort() })
       const workTree = await requireWorkspace(ctx, query.get('workspace'), sessionId, controller.signal)
       try {
-        const result = await serialize(workTree, () => store.restore(workTree, sessionId, request.id as string, controller.signal))
+        const result = await serialize(workTree, () => {
+          const normalize = (path: string) => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path)
+          const target = normalize(workTree)
+          for (const live of ctx.get('sessions')?.list?.() ?? []) {
+            const cwd = live.header.cwd
+            if (!cwd) continue
+            const other = normalize(cwd)
+            if (target !== other && !target.startsWith(`${other}${sep}`) && !other.startsWith(`${target}${sep}`)) continue
+            const boundary = live.events.findLast(event => event.type === 'turn/start' || event.type === 'turn/end')
+            if (boundary?.type === 'turn/start') throw new ApiError(409, 'cannot restore files while a turn is running in this workspace')
+          }
+          return store.restore(workTree, sessionId, request.id as string, controller.signal)
+        })
+        invalidateTurnChangesCache(workTree)
         log.info('restored checkpoint %s in %s', request.id, workTree)
         return result
       } catch (error: unknown) {
@@ -767,7 +821,9 @@ export function mountCheckpoints(
       const current = config().checkpoints
       if (!current.enabled) throw new ApiError(404, 'checkpoints are switched off')
       const workTree = await requireWorkspace(ctx, query.get('workspace'))
-      return { pruned: await store.prune(workTree, current.retentionDays) }
+      const pruned = await serialize(workTree, () => store.prune(workTree, current.retentionDays))
+      invalidateTurnChangesCache(workTree)
+      return { pruned }
     },
 
     '/checkpoints/forget': async ({ method, query, body }) => {
@@ -777,8 +833,28 @@ export function mountCheckpoints(
         throw new ApiError(400, 'discarding a checkpoint history requires confirm: true')
       }
       const workTree = await requireWorkspace(ctx, query.get('workspace'))
-      await store.forget(workTree)
+      await serialize(workTree, () => store.forget(workTree))
+      invalidateTurnChangesCache(workTree)
+      for (const key of turnSnapshots.keys()) {
+        if (key.startsWith(`${workTree}\0`)) turnSnapshots.delete(key)
+      }
       return { forgotten: workTree }
+    },
+  })
+
+  const batchRoutes = installRoutes(routes, {
+    '/checkpoints/turns': async request => {
+      const turns = request.query.getAll('turn')
+      if (turns.length === 0 || turns.length > 100 || turns.some(turn => !/^\d+$/.test(turn))) {
+        throw new ApiError(400, 'request between 1 and 100 turn numbers')
+      }
+      const results = await Promise.all([...new Set(turns)].map(turn => {
+        const query = new URLSearchParams(request.query)
+        query.delete('turn')
+        query.set('turn', turn)
+        return routes['/checkpoints/turn-info']!({ ...request, query })
+      }))
+      return { turns: results }
     },
   })
 
@@ -787,9 +863,9 @@ export function mountCheckpoints(
   // that prunes when it loads.
   const retention = config().checkpoints.retentionDays
   if (retention > 0) {
-    const workTree = ctx.get('workspaceRegistry')?.list()[0]?.path
-    if (workTree !== undefined) {
-      void store.prune(workTree, retention).catch((error: unknown) => {
+    const workTrees = new Set(ctx.get('workspaceRegistry')?.list().map(row => row.path) ?? [])
+    for (const workTree of workTrees) {
+      void serialize(workTree, () => store.prune(workTree, retention)).catch((error: unknown) => {
         log.warn('checkpoints: retention pass failed: %o', error)
       })
     }
@@ -799,7 +875,9 @@ export function mountCheckpoints(
     disposeHook()
     disposeTurnEnd()
     contributed()
+    batchRoutes()
     turnSnapshots.clear()
-    queues.clear()
+    turnChangesCache.clear()
+    sessionRefsCache.clear()
   }
 }
