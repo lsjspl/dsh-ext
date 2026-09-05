@@ -4,12 +4,13 @@ import { useResource } from './use-resource.ts'
 import { INDENT, Notice, rowStyle, token, buttonStyle } from './ui.tsx'
 import { useT } from './use-locale.ts'
 import { FileIcon, FolderIcon } from './file-icons.tsx'
-import { ChevronIcon, CloseIcon, CopyIcon, CheckIcon, FilesIcon, GitIcon, LockIcon, PlusIcon, VscodeIcon, IdeaIcon, FolderIcon as FolderGlyph, iconButtonStyle } from './icons.tsx'
+import { ChevronIcon, CloseIcon, CopyIcon, CheckIcon, FilesIcon, GitIcon, LockIcon, PlusIcon, TerminalIcon, VscodeIcon, IdeaIcon, FolderIcon as FolderGlyph, iconButtonStyle } from './icons.tsx'
 import { useTabs, bindPanelTabs, type Tab, type TabKind } from './tabs.ts'
 import { setPanelOpen } from './panel-state.ts'
 import { callApi } from './api.ts'
 import { CodeView, DiffView } from './DiffView.tsx'
 import { ReviewView } from './ReviewView.tsx'
+import { TerminalView } from './TerminalView.tsx'
 import { API_PREFIX, type ExplorerStatus, type FileView, type OpenEditorResult, type TreeEntry, type SessionBindingResult } from '../shared/api-contract.ts'
 
 /**
@@ -686,7 +687,9 @@ function TabStrip(props: {
         const active = tab.id === props.activeId
         const label = tab.kind === 'editor' || tab.kind === 'diff'
           ? `${baseOf(tab.path ?? '')}${tab.side ? ` (${t(tab.side === 'staged' ? 'git.stagedChanges' : 'git.unstagedChanges')})` : ''}`
-          : tab.kind === 'files' ? t('explorer.files') : t('explorer.changes')
+          : tab.kind === 'terminal'
+            ? `${t('terminal.tab')} ${tab.path ?? ''}`
+            : tab.kind === 'files' ? t('explorer.files') : t('explorer.changes')
         return (
           <div
             key={tab.id}
@@ -725,6 +728,7 @@ function TabStrip(props: {
             {tab.kind === 'files' && <FilesIcon size={15} />}
             {(tab.kind === 'review' || tab.kind === 'diff') && <GitIcon size={15} />}
             {tab.kind === 'editor' && <FileIcon size={15} name={baseOf(tab.path ?? '')} />}
+            {tab.kind === 'terminal' && <TerminalIcon size={15} />}
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
             <button
               type="button"
@@ -762,7 +766,9 @@ function TabStrip(props: {
         onClose={() => { setMenuOpen(false) }}
         onSelect={(id) => {
           setMenuOpen(false)
-          props.onOpen(id === 'files' ? 'files' : 'review')
+          if (id === 'files') props.onOpen('files')
+          else if (id === 'changes') props.onOpen('review')
+          else if (id === 'terminal') props.onOpen('terminal')
         }}
         align="start"
         portal
@@ -770,6 +776,7 @@ function TabStrip(props: {
           { type: 'label', id: 'views', text: t('explorer.views') },
           { id: 'files', label: t('explorer.files'), icon: <FilesIcon size={14} /> },
           { id: 'changes', label: t('explorer.changes'), icon: <GitIcon size={14} /> },
+          { id: 'terminal', label: t('terminal.newTab'), icon: <TerminalIcon size={14} /> },
         ]}
         anchor={
           <button
@@ -799,10 +806,19 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
   // the workspace identity. A session id is a safe fallback while the browser
   // has not resolved a workspace; the settings preview gets an isolated scope.
   const tabScope = props.workspace ?? (props.sessionId === undefined ? 'settings-preview' : `session:${props.sessionId}`)
-  const { tabs, activeId, open: openPanelTab, select: selectPanelTab, close: closePanelTab } = useTabs(tabScope)
+  const { tabs, activeId, open: openTabInStore, select: selectPanelTab, close: closeTabInStore } = useTabs(tabScope)
   // Publish the scope so the conversation's per-turn changes card can open a
   // diff or editor tab here from outside this tree.
   useEffect(() => bindPanelTabs(tabScope), [tabScope])
+  // Closing a terminal tab kills its shell: an invisibly running process with
+  // no way back from this UI is a leak, not a convenience.
+  const closePanelTab = useCallback((id: string) => {
+    const tab = tabs.find(entry => entry.id === id)
+    closeTabInStore(id)
+    if (tab?.kind === 'terminal') {
+      void callApi('/terminal/kill', { body: { id } })
+    }
+  }, [tabs, closeTabInStore])
   const active = tabs.find(tab => tab.id === activeId)
   const scope = [
     props.workspace === undefined ? undefined : `workspace=${encodeURIComponent(props.workspace)}`,
@@ -830,7 +846,7 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
         <TabStrip
           tabs={tabs}
           activeId={activeId}
-          onOpen={openPanelTab}
+          onOpen={openTabInStore}
           onSelect={selectPanelTab}
           onClose={closePanelTab}
         />
@@ -924,7 +940,7 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
                     status.reload()
                     binding.reload?.()
                   }}
-                  onOpenDiff={(path, side) => { openPanelTab('diff', path, side) }}
+                  onOpenDiff={(path, side) => { openTabInStore('diff', path, side) }}
                 />
               )
           )}
@@ -932,11 +948,18 @@ export function ExplorerPanel(props: { workspace?: string; sessionId?: string })
             <FilesView
               workspace={props.workspace}
               sessionId={props.sessionId}
-              onOpenFile={(path) => { openPanelTab('editor', path) }}
+              onOpenFile={(path) => { openTabInStore('editor', path) }}
             />
           )}
           {active?.kind === 'editor' && active.path !== undefined && <EditorView path={active.path} scope={scope} />}
           {active?.kind === 'diff' && active.path !== undefined && <DiffView path={active.path} scope={scope} side={active.side} />}
+          {active?.kind === 'terminal' && (
+            <TerminalView
+              termId={active.id}
+              workspace={props.workspace}
+              sessionId={props.sessionId}
+            />
+          )}
         </ViewBoundary>
       </div>
     </div>

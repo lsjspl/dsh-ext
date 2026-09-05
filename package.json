@@ -55,7 +55,8 @@
     "verify:checkpoints": "node scripts/verify-checkpoints.mjs",
     "verify:regressions": "node scripts/verify-regressions.mjs",
     "verify:client": "node scripts/verify-client.mjs",
-    "verify": "npm run typecheck && npm run verify:parsers && npm run verify:checkpoints && npm run verify:regressions && npm run verify:client",
+    "verify:terminal": "node scripts/verify-terminal.mjs",
+    "verify": "npm run typecheck && npm run verify:parsers && npm run verify:checkpoints && npm run verify:regressions && npm run verify:client && npm run verify:terminal",
     "prepublishOnly": "npm run verify && npm run build"
   },
   "dependencies": {
@@ -63,9 +64,11 @@
     "@deepseek-ai/dsh-home-paths": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-settings": "^0.1.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.1",
+    "@lydell/node-pty": "1.2.0-beta.15",
     "diff": "^9.0.0",
     "react-diff-view": "^3.3.3",
-    "refractor": "^5.0.0"
+    "refractor": "^5.0.0",
+    "ws": "^8.21.3"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"
@@ -99,6 +102,9 @@
     "@deepseek-ai/dsh-workspace": "^0.1.1-rc.2",
     "@types/node": "^22.10.0",
     "@types/react": "~18.3.1",
+    "@types/ws": "^8.18.1",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "esbuild": "^0.24.0",
     "react": "^18.2.0",
     "typescript": "^5.7.0"

@@ -46,28 +46,66 @@ interface PiAiModelEntry {
   readonly id?: unknown
   readonly name?: unknown
   readonly reasoningEfforts?: unknown
+  /** The modality list the pi-ai adapter reads; absent and `[]` both state nothing. */
+  readonly input?: unknown
+  /** Dead field earlier releases wrote, which the adapter never read; reconcile removes it. */
   readonly inputModalities?: unknown
 }
 
 /**
  * The per-model fields this feature writes.
  *
- * `reasoningEfforts` is feature 2's own. `inputModalities` is here because the
- * two share one hard-won piece of knowledge — *where* a pi-ai route's per-model
- * fields may legally be written (see `modelFieldPath`) — and duplicating that
+ * `reasoningEfforts` is feature 2's own. `input` is here because the two share
+ * one hard-won piece of knowledge — *where* a pi-ai route's per-model fields
+ * may legally be written (see `modelFieldPath`) — and duplicating that
  * placement logic for a second field is how the two would drift apart.
  *
- * `inputModalities` matters because the host gates image attachments on it: the
- * server answers `MODEL_DOES_NOT_SUPPORT_IMAGES` when a model's catalog entry
- * does not list `image`, so a genuinely multimodal third-party route refuses
- * pictures until someone says so. That is the "当前模型不支持图片" a user hits on a
- * vision model, and it is configuration rather than a bug.
+ * `input` matters because the host gates image attachments on the resolved
+ * model's `inputModalities` — and the name is the trap: `inputModalities` is
+ * what `resolveModelInfo` reports and what the official llm-deepseek adapter
+ * calls this setting, but the pi-ai adapter's settings field is `input`. A
+ * profile entry written under the longer name passes schema validation and
+ * then sits in the file unread. The adapter resolves an absent or empty
+ * `input` through the route's `defaultInput`, whose built-in default is
+ * `["text"]`, so a genuinely multimodal third-party route refuses pictures
+ * until something writes `["text", "image"]` here. That is the
+ * "当前模型不支持图片" a user hits on a vision model, and it is configuration
+ * rather than a bug.
  */
-type ModelField = 'reasoningEfforts' | 'inputModalities'
+type ModelField = 'reasoningEfforts' | 'input'
 
 /** The complete adapter map written when a model has no explicit ladder. */
 function defaultStoredEfforts(): Record<string, string | null> {
   return Object.fromEntries(DEFAULT_EFFORT_LADDER.map(rung => [rung.id, rung.wire]))
+}
+
+/**
+ * A model entry's modality statement as the adapter reads it.
+ *
+ * Absent and `[]` both state nothing — the schema materializes `[]` for an
+ * omitted array, and the adapter treats an empty list the same way — so an
+ * entry that names no modalities inherits the route's `defaultInput`, which
+ * is `["text"]` unless the profile says otherwise.
+ */
+function declaredInput(entry: PiAiModelEntry | undefined): readonly unknown[] | undefined {
+  const value = entry?.input
+  return Array.isArray(value) && value.length > 0 ? value : undefined
+}
+
+/**
+ * Retire the dead `inputModalities` key earlier releases wrote.
+ *
+ * The pi-ai adapter never reads that field, so it changed nothing where it
+ * sat; a recorded list moves to `input` — a text-only choice included, so the
+ * vision default below cannot flip it — and the dead key itself is dropped.
+ */
+function dropStaleInputModalities(entry: PiAiModelEntry): PiAiModelEntry {
+  if (entry.inputModalities === undefined) return entry
+  const { inputModalities: _drop, ...rest } = entry as Record<string, unknown>
+  const recorded = Array.isArray(entry.inputModalities) ? entry.inputModalities : undefined
+  return (recorded !== undefined && declaredInput(entry) === undefined
+    ? { ...rest, input: recorded }
+    : rest) as PiAiModelEntry
 }
 
 interface PiAiProfile {
@@ -224,14 +262,17 @@ export function mountReasoningEffort(
    * settings page: the host gates image attachments and the composer effort
    * picker against resolved model info. Missing fields are filled; any explicit
    * per-model statement — including `false` reasoning or text-only modalities —
-   * wins and is never overwritten.
+   * wins and is never overwritten. The run also retires the dead
+   * `inputModalities` key earlier releases wrote (see
+   * `dropStaleInputModalities`), which is why it runs even with both defaults
+   * switched off.
    */
   async function reconcileDefaults(signal?: AbortSignal): Promise<void> {
     const settings = ctx.get('settings')
     const defaults = config().reasoningEffort
     const fullEfforts = defaults.defaultFullEfforts ?? true
     const vision = defaults.defaultVision ?? true
-    if (settings === undefined || (!fullEfforts && !vision)) return
+    if (settings === undefined) return
 
     const section = piAiSection()
     if (!section.writable) return
@@ -244,13 +285,14 @@ export function mountReasoningEffort(
       if (declared !== undefined) {
         let changed = false
         const models = declared.map(entry => {
-          let next = entry
-          if (fullEfforts && entry.reasoningEfforts === undefined) {
+          let next = dropStaleInputModalities(entry)
+          if (next !== entry) changed = true
+          if (fullEfforts && next.reasoningEfforts === undefined) {
             next = { ...next, reasoningEfforts: defaultStoredEfforts() }
             changed = true
           }
-          if (vision && entry.inputModalities === undefined) {
-            next = { ...next, inputModalities: ['text', 'image'] }
+          if (vision && declaredInput(next) === undefined) {
+            next = { ...next, input: ['text', 'image'] }
             changed = true
           }
           return next
@@ -275,6 +317,7 @@ export function mountReasoningEffort(
       }
       for (const id of ids) {
         const override = overrides[id]
+        const migrated = override === undefined ? undefined : dropStaleInputModalities(override)
         if (fullEfforts && override?.reasoningEfforts === undefined) {
           ops.push({
             op: 'set',
@@ -282,10 +325,25 @@ export function mountReasoningEffort(
             value: defaultStoredEfforts() as never,
           })
         }
-        if (vision && override?.inputModalities === undefined) {
+        // The same dead-field retirement as the models-list branch: what the
+        // old key recorded moves to `input` before the default below considers
+        // a fill, and the key itself is unset.
+        if (override !== undefined && migrated !== override) {
+          if (declaredInput(migrated) !== undefined) {
+            ops.push({
+              op: 'set',
+              path: ['providers', route, 'modelOverrides', id, 'input'],
+              value: migrated?.input as never,
+            })
+          }
+          ops.push({ op: 'unset', path: ['providers', route, 'modelOverrides', id, 'inputModalities'] })
+        }
+        // Judged against the migrated entry, so a recorded text-only choice
+        // survives and a carried image list is not written twice.
+        if (vision && declaredInput(migrated) === undefined) {
           ops.push({
             op: 'set',
-            path: ['providers', route, 'modelOverrides', id, 'inputModalities'],
+            path: ['providers', route, 'modelOverrides', id, 'input'],
             value: ['text', 'image'] as never,
           })
         }
@@ -357,10 +415,12 @@ export function mountReasoningEffort(
         }
         // Whether this model is declared to take images, and whether that came
         // from the user or from the catalog. The page needs the distinction: a
-        // `true` it can clear is a different control from one it cannot.
-        const declaredModalities = overrideEntry?.inputModalities ?? declaredEntry?.inputModalities
-        let vision: boolean | undefined = Array.isArray(declaredModalities)
-          ? declaredModalities.includes('image')
+        // `true` it can clear is a different control from one it cannot. The
+        // override wins, exactly as the adapter layers them, and `[]` states
+        // nothing — it falls through to the entry below or the default.
+        const explicitInput = declaredInput(overrideEntry) ?? declaredInput(declaredEntry)
+        let vision: boolean | undefined = explicitInput !== undefined
+          ? explicitInput.includes('image')
           : config().reasoningEffort.defaultVision ? true : undefined
         if (vision === undefined && live.has(route) && llm !== undefined) {
           try {
@@ -377,7 +437,7 @@ export function mountReasoningEffort(
           overrideEfforts: readEfforts(effective),
           defaultEffort: undefined,
           vision,
-          visionOverridden: Array.isArray(declaredModalities),
+          visionOverridden: explicitInput !== undefined,
         })
       }
       models.sort((a, b) => a.id.localeCompare(b.id))
@@ -472,6 +532,8 @@ export function mountReasoningEffort(
      *
      * Separate from `/efforts/set` only in the value it validates — the placement
      * rules are shared, which is the whole reason `modelFieldPath` is generic.
+     * The field is `input`, the pi-ai adapter's settings name for the modality
+     * list it reports as `inputModalities` on resolved model info.
      */
     '/vision/set': async ({ body, method }) => {
       if (method !== 'POST') throw new ApiError(405, 'use POST to set a model’s modalities')
@@ -485,7 +547,7 @@ export function mountReasoningEffort(
         : request.vision === true ? ['text', 'image']
           : request.vision === false ? ['text']
             : (() => { throw new ApiError(400, 'vision must be true, false, or omitted') })()
-      return await writeModelField('inputModalities', request, value)
+      return await writeModelField('input', request, value)
     },
   })
 

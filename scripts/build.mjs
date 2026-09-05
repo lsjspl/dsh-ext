@@ -58,6 +58,10 @@ await build({
   platform: 'browser',
   jsx: 'automatic',
   external: CLIENT_EXTERNAL,
+  // xterm's stylesheet travels as a string (imported by TerminalView and
+  // injected at runtime): the loader artifact is one JS factory, so a second
+  // emitted .css file could never reach the page.
+  loader: { '.css': 'text' },
   banner: {
     js: `window.__ModuleLoader__.load({\n\tid: ${JSON.stringify(pkg.name)},\n\tfactory: (require) => {\nvar module = { exports: {} };\nvar exports = module.exports;\n`,
   },

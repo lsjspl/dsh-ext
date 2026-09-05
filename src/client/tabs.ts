@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from 'react'
  * other's tab operations.
  */
 
-export type TabKind = 'files' | 'review' | 'editor' | 'diff'
+export type TabKind = 'files' | 'review' | 'editor' | 'diff' | 'terminal'
 
 export interface Tab {
   readonly id: string
@@ -48,7 +48,9 @@ function initial(): TabState {
 }
 
 function tabId(kind: TabKind, path?: string, side?: 'staged' | 'unstaged'): string {
-  return kind === 'editor' || kind === 'diff' ? `${kind}:${path ?? ''}${kind === 'diff' && side ? `:${side}` : ''}` : kind
+  return kind === 'editor' || kind === 'diff' || kind === 'terminal'
+    ? `${kind}:${path ?? ''}${kind === 'diff' && side ? `:${side}` : ''}`
+    : kind
 }
 
 function parseState(stored: string | null): TabState | undefined {
@@ -65,8 +67,8 @@ function parseState(stored: string | null): TabState | undefined {
       const path = (entry as { path?: unknown }).path
       const rawSide = (entry as { side?: unknown }).side
       const side = rawSide === 'staged' || rawSide === 'unstaged' ? rawSide : undefined
-      if (kind !== 'files' && kind !== 'review' && kind !== 'editor' && kind !== 'diff') return []
-      if ((kind === 'editor' || kind === 'diff') && typeof path !== 'string') return []
+      if (kind !== 'files' && kind !== 'review' && kind !== 'editor' && kind !== 'diff' && kind !== 'terminal') return []
+      if ((kind === 'editor' || kind === 'diff' || kind === 'terminal') && typeof path !== 'string') return []
       return [{
         id: tabId(kind, typeof path === 'string' ? path : undefined, side),
         kind,
@@ -121,14 +123,32 @@ function commit(scope: string, next: TabState): void {
   for (const listener of [...(listeners.get(scope) ?? [])]) listener()
 }
 
+/**
+ * The next free terminal instance number: terminals are one-per-instance tabs
+ * (`terminal:1`, `terminal:2`, …) while Files/Review are singletons and
+ * editor/diff tabs are one per path.
+ */
+function nextTerminalIndex(tabs: readonly Tab[]): string {
+  let max = 0
+  for (const tab of tabs) {
+    if (tab.kind !== 'terminal') continue
+    const n = Number.parseInt(tab.path ?? '', 10)
+    if (Number.isSafeInteger(n) && n > max) max = n
+  }
+  return String(max + 1)
+}
+
 function open(scope: string, kind: TabKind, path?: string, side?: 'staged' | 'unstaged'): void {
   const now = current(scope)
-  const id = tabId(kind, path, side)
+  // Every `+ → terminal` click opens a NEW terminal; naming an instance (never
+  // done from the UI) reopens that one instead.
+  const effectivePath = kind === 'terminal' && path === undefined ? nextTerminalIndex(now.tabs) : path
+  const id = tabId(kind, effectivePath, side)
   if (now.tabs.some(tab => tab.id === id)) {
     if (now.activeId !== id) commit(scope, { ...now, activeId: id })
     return
   }
-  const tab: Tab = { id, kind, side, ...(path === undefined ? {} : { path }) }
+  const tab: Tab = { id, kind, side, ...(effectivePath === undefined ? {} : { path: effectivePath }) }
   commit(scope, { tabs: [...now.tabs, tab], activeId: id })
 }
 

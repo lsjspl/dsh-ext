@@ -22,7 +22,7 @@ import {
   type GitCommitLanguage,
   type GitSessionBindingMode,
 } from '../config.ts'
-import type { ReviewModels } from '../shared/api-contract.ts'
+import type { ReviewModels, TerminalShells } from '../shared/api-contract.ts'
 
 function SubSectionHeader(props: {
   title: string
@@ -278,6 +278,9 @@ export function SettingsPage() {
   // The reviewer model picker's rows. Read unconditionally (a hook), used only
   // by the review tab: one dropdown over every model the live routes advertise.
   const reviewModels = useResource<ReviewModels>('/review/models')
+  // The terminal shell picker's rows, probed on the machine running the
+  // harness. Also read unconditionally; used only by the files tab.
+  const shells = useResource<TerminalShells>('/terminal/shells')
 
   if (view === undefined) {
     return (
@@ -1024,6 +1027,7 @@ export function SettingsPage() {
 
 
         {tab === 'files' && (
+          <>
           <Section
             title={t('section.explorer')}
             description={t('section.explorer.desc')}
@@ -1055,6 +1059,67 @@ export function SettingsPage() {
                 onChange={next => { set(['explorer', 'respectGitignore'], next) }} />}
             />
           </Section>
+
+          <Section
+            title={t('section.terminal')}
+            description={t('section.terminal.desc')}
+            action={<Toggle label={t('section.terminal')} checked={c.terminal.enabled} disabled={disabled}
+              onChange={next => { set(['terminal', 'enabled'], next) }} />}
+            onReset={() => { resetSection('terminal') }}
+          >
+            {shells.data?.ptyAvailable === false && (
+              <Notice kind="error">{t('terminal.ptyMissing', { message: shells.data.ptyError ?? '' })}</Notice>
+            )}
+            <Row
+              label={t('terminal.shell')}
+              hint={t('terminal.shell.hint')}
+              control={<Select<string>
+                label={t('terminal.shell')}
+                value={c.terminal.shell}
+                disabled={disabled || !c.terminal.enabled}
+                onChange={next => { set(['terminal', 'shell'], next) }}
+                options={[
+                  {
+                    value: 'auto',
+                    label: `${t('terminal.shell.auto')}${shells.data?.auto.label ? ` (${shells.data.auto.label})` : ''}`,
+                  },
+                  ...(shells.data?.shells ?? []).map(shell => ({
+                    value: shell.id,
+                    label: shell.available ? shell.label : `${shell.label} · ${t('terminal.shell.unavailable')}`,
+                  })),
+                  // A stored absolute path that matches no preset stays visible
+                  // instead of silently falling back to another value.
+                  ...(!['auto', ...(shells.data?.shells ?? []).map(shell => shell.id)].includes(c.terminal.shell)
+                    ? [{ value: c.terminal.shell, label: c.terminal.shell }]
+                    : []),
+                ]} />}
+            />
+            <Row
+              label={t('terminal.shellArgs')}
+              hint={t('terminal.shellArgs.hint')}
+              control={<TextField
+                label={t('terminal.shellArgs')}
+                value={c.terminal.shellArgs.join(' ')}
+                placeholder="-NoLogo -NoProfile"
+                disabled={disabled || !c.terminal.enabled}
+                onCommit={next => { set(['terminal', 'shellArgs'], next.length === 0 ? [] : next.split(/\s+/)) }} />}
+            />
+            <Row
+              label={t('terminal.scrollback')}
+              hint={t('terminal.scrollback.hint')}
+              control={<NumberField
+                label={t('terminal.scrollback')}
+                value={c.terminal.scrollbackLines}
+                min={100}
+                max={50000}
+                step={100}
+                suffix="lines"
+                width={110}
+                disabled={disabled || !c.terminal.enabled}
+                onCommit={next => { set(['terminal', 'scrollbackLines'], next) }} />}
+            />
+          </Section>
+          </>
         )}
 
         {tab === 'git' && (

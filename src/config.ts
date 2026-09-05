@@ -118,6 +118,22 @@ export interface SessionAdminConfig {
   attachmentGc: boolean
 }
 
+export interface TerminalConfig {
+  enabled: boolean
+  /**
+   * Which shell to spawn: `'auto'` (the platform default), a preset id the
+   * `/terminal/shells` endpoint reports, or an absolute executable path.
+   */
+  shell: string
+  /** Extra arguments appended after the shell's own preset argv. */
+  shellArgs: string[]
+  /**
+   * Output lines kept server-side per terminal, so a page refresh or a tab
+   * switch can restore the screen by replay.
+   */
+  scrollbackLines: number
+}
+
 export interface PluginSafetyConfig {
   enabled: boolean
   quarantine: string[]
@@ -142,6 +158,7 @@ export interface Config {
   sessionAdmin: SessionAdminConfig
   pluginSafety: PluginSafetyConfig
   checkpoints: CheckpointsConfig
+  terminal: TerminalConfig
 }
 
 /**
@@ -325,6 +342,13 @@ export const Config: z<Config> = z.object({
     maxFileSizeMb: z.number().step(1).min(1).max(1024).default(32).description('Skip files larger than this in a snapshot.'),
     retentionDays: z.number().step(1).min(0).max(3650).default(30).description('Prune checkpoints older than this. 0 keeps everything.'),
   }),
+
+  terminal: z.object({
+    enabled: z.boolean().default(true).description('侧边栏终端：在右栏 + 菜单里新建终端标签页，直接执行命令。'),
+    shell: z.string().default('auto').description('执行命令的 Shell：auto 跟随平台默认（Windows 用 PowerShell，macOS/Linux 用 $SHELL），也可以选预设 id，或填可执行文件的绝对路径。'),
+    shellArgs: z.array(z.string()).default([]).description('启动 Shell 时追加的额外参数。'),
+    scrollbackLines: z.number().step(1).min(100).max(50000).default(2000).description('每个终端在服务端保留的回滚行数，页面刷新或切回标签页时用于恢复画面。'),
+  }),
 })
 
 export const DEFAULT_CONFIG: Config = {
@@ -401,5 +425,11 @@ export const DEFAULT_CONFIG: Config = {
     excludes: [...DEFAULT_CHECKPOINT_EXCLUDES],
     maxFileSizeMb: 32,
     retentionDays: 30,
+  },
+  terminal: {
+    enabled: true,
+    shell: 'auto',
+    shellArgs: [],
+    scrollbackLines: 2000,
   },
 }

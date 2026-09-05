@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactElement } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import {
   Diff,
   Hunk,
@@ -44,6 +44,7 @@ import diffGrammar from 'refractor/diff'
 import { useResource } from './use-resource.ts'
 import { Notice, token } from './ui.tsx'
 import { useT } from './use-locale.ts'
+import { surfaceScheme, type SurfaceScheme } from './theme.ts'
 import { countAddedStyle, countRemovedStyle } from './ReviewView.tsx'
 import type { ReviewDiff } from '../shared/api-contract.ts'
 
@@ -311,8 +312,47 @@ function injectDiffStyles(): void {
 .${DIFF_CLASS} .token.operator,
 .${DIFF_CLASS} .token.entity,
 .${DIFF_CLASS} .token.url { color: var(--shiki-foreground, #f9fafb); }
+
+/* Light surfaces: the dark-sheet fallbacks above are unreadable on white (a
+   near-white link colour on a white panel is the case the user sees as
+   "invisible"), and the host's shiki variables do not reach the side panel in
+   every theme. Re-declaring the variables here — rather than restyling each
+   token — beats whatever ancestor defined, and the existing var() rules pick
+   the values up unchanged. GitHub Light values. */
+[data-code-scheme="light"] .${DIFF_CLASS} {
+  --shiki-token-comment: #6e7781;
+  --shiki-token-punctuation: #57606a;
+  --shiki-token-deleted: #cf222e;
+  --shiki-token-keyword: #cf222e;
+  --shiki-token-string: #0a3069;
+  --shiki-token-constant: #953800;
+  --shiki-token-function: #8250df;
+  --shiki-foreground: #24292f;
+}
 `
   document.head.appendChild(style)
+}
+
+/**
+ * The scroll container around a code table, tagged with the scheme of the
+ * surface it renders on. The sheet keys its light syntax palette off this
+ * attribute; measuring at layout time (rather than configuring a theme name)
+ * is what keeps the tag honest when the shell switches themes — the next
+ * mounted view picks the new side up on its first paint.
+ */
+function CodeSurface(props: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [scheme, setScheme] = useState<SurfaceScheme>('dark')
+  useLayoutEffect(() => {
+    const node = ref.current
+    if (node === null) return
+    setScheme(surfaceScheme(node))
+  }, [])
+  return (
+    <div ref={ref} data-code-scheme={scheme} style={{ overflow: 'auto', minWidth: 0 }}>
+      {props.children}
+    </div>
+  )
 }
 
 /**
@@ -350,7 +390,7 @@ export function CodeView(props: { path: string; content: string }) {
 
   if (hunks.length === 0) return null
   return (
-    <div style={{ overflow: 'auto', minWidth: 0 }}>
+    <CodeSurface>
       <Diff
         className={DIFF_CLASS}
         viewType="unified"
@@ -362,7 +402,7 @@ export function CodeView(props: { path: string; content: string }) {
           <Hunk key={`plain-${hunk.oldStart}-${index}`} hunk={hunk} />
         ))}
       </Diff>
-    </div>
+    </CodeSurface>
   )
 }
 
@@ -557,7 +597,7 @@ export function DiffView(props: { path: string; scope: string; side?: 'staged' |
         {data.added !== undefined && <span style={countAddedStyle}>+{data.added}</span>}
         {data.removed !== undefined && <span style={countRemovedStyle}>-{data.removed}</span>}
       </div>
-      <div style={{ overflow: 'auto', minWidth: 0 }}>
+      <CodeSurface>
         <Diff
           className={DIFF_CLASS}
           viewType="unified"
@@ -590,7 +630,7 @@ export function DiffView(props: { path: string; scope: string; side?: 'staged' |
             return rows
           }}
         </Diff>
-      </div>
+      </CodeSurface>
     </div>
   )
 }

@@ -24,6 +24,7 @@ const result = await build({
     export { Select } from './client/ui.tsx'
     export { reviewFollowsSession, effectiveDeletePolicy, usesReviewModel, DEFAULT_CONFIG } from './config.ts'
     export { DICTS } from './client/locales.ts'
+    export { RESCUE_SENTINEL_SCRIPT } from './sentinel.ts'
   `, resolveDir: resolve('src'), loader: 'ts' },
   bundle: true, write: false, format: 'cjs', platform: 'node', packages: 'external', jsx: 'automatic', logLevel: 'error',
   plugins: [{ name: 'host-boundary-mocks', setup(builder) {
@@ -60,6 +61,95 @@ const base = () => ({
 })
 
 try {
+  await test('boot rescue commands survive backend failure and copy individual safe commands', async () => {
+    class Element {
+      constructor(tag) { this.tagName = tag; this.children = []; this.attributes = {}; this._text = '' }
+      appendChild(child) { this.children.push(child); return child }
+      set textContent(value) { this._text = value; this.children = [] }
+      get textContent() { return this._text + this.children.map(child => child.textContent).join('\n') }
+      get innerText() { return this.textContent }
+      set innerHTML(value) { assert.equal(value, ''); this.children = []; this._text = '' }
+      setAttribute(key, value) { this.attributes[key] = value }
+      querySelectorAll(selector) {
+        const all = this.children.flatMap(child => [child, ...child.querySelectorAll('*')])
+        return selector === '*' ? all : all.filter(child => selector.startsWith('.')
+          ? (child.className ?? '').split(' ').includes(selector.slice(1)) : child.tagName === selector)
+      }
+      querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null }
+    }
+    const render = async ({ plugin, inventory, rejectClipboard = false }) => {
+      const head = new Element('head')
+      const body = new Element('body')
+      const boot = body.appendChild(new Element('main'))
+      const card = boot.appendChild(new Element('div'))
+      const title = card.appendChild(new Element('h2'))
+      title.textContent = 'Failed to load plugins'
+      if (plugin) card.appendChild(new Element('code')).textContent = plugin
+      const fetches = [], copied = [], selections = []
+      let observerCallback, reloads = 0
+      const doc = {
+        head, body, createElement: tag => new Element(tag),
+        getElementById: id => [...head.querySelectorAll('*'), ...body.querySelectorAll('*')].find(node => node.id === id),
+        querySelector: selector => selector === '[data-dsh-boot]' ? boot : null,
+        createRange: () => ({ selectNodeContents(node) { this.node = node } }),
+      }
+      const browser = {
+        location: { reload() { reloads++ } },
+        getSelection: () => ({ removeAllRanges() {}, addRange(range) { selections.push(range.node.textContent) } }),
+      }
+      const navigator = { clipboard: { writeText: async value => {
+        if (rejectClipboard) throw new Error('permission denied')
+        copied.push(value)
+      } } }
+      const fetch = async (url, options) => {
+        fetches.push({ url, options })
+        if (!inventory) throw new Error('backend unavailable')
+        return { json: async () => ({ plugins: inventory }) }
+      }
+      const Observer = class { constructor(callback) { observerCallback = callback } observe() {} }
+      new Function('window', 'document', 'navigator', 'MutationObserver', 'fetch', 'setTimeout', 'setInterval', 'clearInterval', mod.exports.RESCUE_SENTINEL_SCRIPT)(
+        browser, doc, navigator, Observer, fetch, () => 1, () => 1, () => {},
+      )
+      await settle()
+      observerCallback()
+      const list = doc.getElementById('dsh-ext-rescue-commands')
+      return { doc, list, copied, selections, fetches, reloads: () => reloads,
+        commands: () => list.querySelectorAll('code').map(code => code.textContent) }
+    }
+    const failed = await render({ plugin: 'dsh-plugin-grok2api-media-tool' })
+    assert.deepEqual(failed.commands(), [
+      'npx dsh-ext skip dsh-plugin-grok2api-media-tool', 'npx dsh-ext safe', 'npx dsh-ext status',
+      'npx dsh-ext list', 'npx dsh-ext unskip dsh-plugin-grok2api-media-tool', 'npx dsh-ext restore',
+    ])
+    const copy = failed.list.querySelector('button')
+    copy.onclick()
+    await settle()
+    assert.deepEqual(failed.copied, [failed.commands()[0]])
+    assert.equal(copy.textContent, '已复制')
+    assert.equal(copy.disabled, false)
+    assert.equal(failed.fetches.length, 1, 'copying must not call a mutation API')
+    assert.equal(failed.reloads(), 0)
+    assert.equal(failed.doc.body.querySelectorAll('*').filter(node => node.id === 'dsh-ext-rescue-card').length, 1)
+    assert.match(failed.doc.getElementById('dsh-ext-rescue-styles').textContent, /@media \(max-width: 600px\)/)
+    const styles = failed.doc.getElementById('dsh-ext-rescue-styles').textContent
+    assert.match(styles, /width: min\(640px, calc\(100vw - 48px\)\)/)
+    assert.match(styles, /grid-template-columns: minmax\(0, 1fr\) 56px/)
+    assert.ok(!styles.includes('grid-template-columns: 132px'), 'descriptions must not occupy a separate wide column')
+
+    const fallback = await render({ rejectClipboard: true })
+    assert.equal(fallback.commands()[0], 'npx dsh-ext skip PLUGIN_NAME')
+    fallback.list.querySelector('button').onclick()
+    await settle()
+    assert.equal(fallback.list.querySelector('button').textContent, '手动复制')
+    assert.deepEqual(fallback.selections, ['npx dsh-ext skip PLUGIN_NAME'])
+
+    const enriched = await render({ inventory: [
+      { name: '@scope/plugin.name', builtin: false }, { name: 'bad; echo injected', builtin: false },
+    ] })
+    assert.equal(enriched.commands()[0], 'npx dsh-ext skip @scope/plugin.name')
+    assert.equal(enriched.commands()[4], 'npx dsh-ext unskip @scope/plugin.name')
+    assert.ok(enriched.commands().every(command => !command.includes('injected')))
+  })
   await test('independent policies have four choices and dynamic detailed descriptions', async () => {
     const page = readFileSync(resolve('src/client/SettingsPage.tsx'), 'utf8')
     const deletion = page.indexOf("label={t('review.deleteCommand')} hint=")
@@ -176,6 +266,34 @@ try {
     assert.equal(diffs.length, 2)
     assert.notEqual(diffs[0].id, diffs[1].id)
     assert.deepEqual(diffs.map(tab => tab.side), ['staged', 'unstaged'])
+  })
+  await test('terminal tabs are one new instance per + click and survive a reload', async () => {
+    let tabs = useTabs('terminal-scope')
+    tabs.open('terminal')
+    tabs.open('terminal')
+    tabs.open('terminal')
+    tabs = useTabs('terminal-scope')
+    const terminals = tabs.tabs.filter(tab => tab.kind === 'terminal')
+    assert.deepEqual(terminals.map(tab => tab.id), ['terminal:1', 'terminal:2', 'terminal:3'])
+    assert.equal(tabs.activeId, 'terminal:3')
+    // Reopening a named instance activates it instead of adding a twin.
+    tabs.open('terminal', '1')
+    tabs = useTabs('terminal-scope')
+    assert.equal(tabs.tabs.filter(tab => tab.kind === 'terminal').length, 3)
+    assert.equal(tabs.activeId, 'terminal:1')
+    // Closing the active one lands on its neighbour. A closed terminal's
+    // session is killed at close, so its number may safely be reused.
+    tabs.close('terminal:3')
+    tabs = useTabs('terminal-scope')
+    tabs.open('terminal')
+    tabs = useTabs('terminal-scope')
+    assert.equal(tabs.tabs.filter(tab => tab.kind === 'terminal').length, 3)
+    assert.ok(tabs.tabs.some(tab => tab.id === 'terminal:3'), 'the freed number is reused once the shell was killed')
+    // A second workspace starts from its own terminal:1.
+    const other = useTabs('other-scope')
+    other.open('terminal')
+    const otherTerminals = useTabs('other-scope').tabs.filter(tab => tab.kind === 'terminal')
+    assert.deepEqual(otherTerminals.map(tab => tab.id), ['terminal:1'])
   })
   await test('turn requests batch by session, slow down when closed, and clear expired checkpoints', async () => {
     let calls = 0

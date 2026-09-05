@@ -59,6 +59,7 @@
 | **会话回收站** | 会话软删除/归档、回收站还原、永久删除；当前宿主不支持安全的附件 GC，附件保留 | 左侧栏底部 |
 | **插件安全与自愈** | 插件隔离名单、一键安全模式、Web 应急救援面板、零依赖 CLI 救援工具 | 设置页、终端 CLI |
 | **按会话检查点** | 基于独立影子 Git 仓库的快照、差异、回滚，支持按轮次/工具调用自动快照 | 会话内变更卡片、设置页 |
+| **侧边栏终端** | 在右栏 `+` 菜单新建终端标签页，直接执行命令；基于 xterm.js + node-pty（Win/macOS/Linux），支持切回恢复画面、刷新重连、多终端实例 | 侧边栏 `+` 菜单、设置页 |
 
 ---
 
@@ -223,6 +224,11 @@ dsh-ext:
       - "*.log"
     maxFileSizeMb: 32
     retentionDays: 30
+  terminal:
+    enabled: true
+    shell: auto
+    shellArgs: []
+    scrollbackLines: 2000
 ```
 
 ### 配置参数说明
@@ -297,6 +303,10 @@ dsh-ext:
 | `checkpoints.excludes` | `string[]` | 内置排除列表 | 影子仓库排除路径（git ignore 语法） |
 | `checkpoints.maxFileSizeMb` | `number` | `32` | 单文件快照大小上限（MB） |
 | `checkpoints.retentionDays` | `number` | `30` | 检查点保留天数，`0` 表示永久保留 |
+| `terminal.enabled` | `boolean` | `true` | 是否启用侧边栏终端 |
+| `terminal.shell` | `string` | `auto` | 执行命令的 Shell：`auto` 跟随平台默认，可选预设 id（`powershell`/`pwsh`/`cmd`/`gitbash`/`wsl`/`zsh`/`bash` 等），或填可执行文件绝对路径 |
+| `terminal.shellArgs` | `string[]` | `[]` | 启动 Shell 时追加的参数 |
+| `terminal.scrollbackLines` | `number` | `2000` | 每个终端在服务端保留的回滚行数，页面刷新或切回标签页时用于恢复画面 |
 
 ---
 

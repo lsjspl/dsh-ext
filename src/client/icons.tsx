@@ -351,3 +351,15 @@ export function LockIcon(props: IconProps) {
   )
 }
 
+
+/** A terminal window: framed screen with a `>_` prompt. */
+export function TerminalIcon(props: IconProps) {
+  const size = props.size ?? 16
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true" style={props.style}>
+      <rect x="0.75" y="2.25" width="14.5" height="11.5" rx="2" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M3.6 5.8L6 7.8L3.6 9.8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M7.8 10.3H12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}

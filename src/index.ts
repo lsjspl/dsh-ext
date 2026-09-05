@@ -12,11 +12,15 @@ import { mountGitOps } from './features/git-ops.ts'
 import { mountSessionAdmin } from './features/session-admin.ts'
 import { mountPluginSafety } from './features/plugin-safety.ts'
 import { mountCheckpoints } from './features/checkpoints.ts'
+import { mountTerminal, TERMINAL_WS_PATH } from './features/terminal.ts'
 import { mountReasoningEffort } from './features/reasoning-effort.ts'
 import { RESCUE_SENTINEL_SCRIPT } from './sentinel.ts'
 
 
 export { Config } from './config.ts'
+// Re-exported for the verify suite, which mounts the terminal against a
+// stand-in webserver; the plugin loader itself only reads apply/inject/name.
+export { mountTerminal, TERMINAL_WS_PATH }
 export const name = 'dsh-ext'
 
 /**
@@ -94,6 +98,11 @@ export function apply(ctx: Context, entry: Config): void {
       id: 'checkpoints',
       enabled: config => config.checkpoints.enabled,
       mount: () => mountCheckpoints(ctx, settings.current, routes, paths.checkpoints),
+    },
+    {
+      id: 'terminal',
+      enabled: config => config.terminal.enabled,
+      mount: () => mountTerminal(ctx, settings.current, routes),
     },
   ]
 

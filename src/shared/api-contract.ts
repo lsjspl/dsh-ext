@@ -464,3 +464,27 @@ export interface GenerateCommitResult {
   readonly body?: string
   readonly error?: string
 }
+
+// ── Terminal ───────────────────────────────────────────────────────────────
+
+/** One shell the server knows about, offered in the settings page's picker. */
+export interface TerminalShellOption {
+  /** Preset id stored in `terminal.shell`, or the path itself for ad-hoc rows. */
+  readonly id: string
+  readonly label: string
+  readonly path: string
+  readonly args: readonly string[]
+  /** False when none of the preset's candidate paths exists on this machine. */
+  readonly available: boolean
+}
+
+/** What `/terminal/shells` answers. */
+export interface TerminalShells {
+  readonly shells: readonly TerminalShellOption[]
+  /** The resolved `auto` choice, so the settings page can show what it means. */
+  readonly auto: TerminalShellOption
+  /** False when the host process could not load the PTY native module. */
+  readonly ptyAvailable: boolean
+  /** Why the PTY module failed to load, when it did. */
+  readonly ptyError?: string
+}

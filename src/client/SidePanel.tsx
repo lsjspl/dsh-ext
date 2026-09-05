@@ -90,10 +90,19 @@ export function SidePanel(props: SidePanelProps) {
     }
   }, [open, props.side, width])
 
-  // Escape closes it, like every other transient surface in the shell.
+  // Escape closes it, like every other transient surface in the shell — but
+  // not when the terminal tab has focus: there Escape is an escape character
+  // the shell itself needs (vi, less, a cancelled readline). xterm's own
+  // keydown handler preventDefaults the keys it consumes; the [data-dsh-part]
+  // check is the belt to that brace, for keys xterm may not claim.
   useEffect(() => {
     if (!open) return
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setPanelOpen(false) }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      const target = event.target
+      if (target instanceof Element && target.closest('[data-dsh-part="terminal"]')) return
+      setPanelOpen(false)
+    }
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('keydown', onKey) }
   }, [open])
